@@ -1,6 +1,7 @@
 import axios from "axios";
 import crypto from "crypto";
 import bitcoin from "bitcoinjs-lib";
+import net from "net";
 
 import servicesConfig from "../config/services.js";
 import logger from "../config/logger.js";
@@ -65,37 +66,41 @@ class ServiceManager {
         let client;
 
         if (service.type === "json-rpc") {
-          const axiosConfig = {
-            baseURL: service.url,
-            timeout: service.timeout,
-            headers: {
-              "Content-Type": "application/json",
-            },
-          };
-
-          if (service.name === "node-rpc" && service.username && service.password) {
-            axiosConfig.auth = {
-              username: service.username,
-              password: service.password,
+          if (service.protocol === "tcp") {
+            client = {
+              type: "tcp",
+              host: service.host,
+              port: service.port,
+              timeout: service.timeout
+            };
+            
+            logger.info(`Configuring TCP JSON-RPC client`, {
+              url: service.url,
+              protocol: service.protocol,
+            });
+          } else {
+            const axiosConfig = {
+              baseURL: service.url,
+              timeout: service.timeout,
+              headers: {
+                "Content-Type": "application/json",
+              },
             };
 
-            logger.info(`Configuring TBC Node RPC authentication`, {
-              url: service.url,
-              hasAuth: true,
-            });
-          } else if (service.name === "electrumx-rpc" && service.username && service.password) {
-            axiosConfig.auth = {
-              username: service.username,
-              password: service.password,
-            };
+            if (service.name === "node-rpc" && service.username && service.password) {
+              axiosConfig.auth = {
+                username: service.username,
+                password: service.password,
+              };
 
-            logger.info(`Configuring ElectrumX RPC authentication`, {
-              url: service.url,
-              hasAuth: true,
-            });
+              logger.info(`Configuring TBC Node RPC authentication`, {
+                url: service.url,
+                hasAuth: true,
+              });
+            }
+
+            client = axios.create(axiosConfig);
           }
-
-          client = axios.create(axiosConfig);
         } else {
           throw new Error(`Unsupported service type: ${service.type}`);
         }
@@ -109,6 +114,7 @@ class ServiceManager {
           `Service client initialized successfully: ${service.name}`,
           {
             type: service.type,
+            protocol: service.protocol,
             url: service.url,
             timeout: service.timeout,
           }
@@ -116,6 +122,7 @@ class ServiceManager {
       } catch (error) {
         logger.error(`Service client initialization failed: ${service.name}`, {
           type: service.type,
+          protocol: service.protocol,
           url: service.url,
           error: error.message,
         });
@@ -203,6 +210,57 @@ class ServiceManager {
     }
   }
 
+  async callTcpRpc(host, port, method, params, timeout = 10000) {
+    return new Promise((resolve, reject) => {
+      const client = new net.Socket();
+      
+      const payload = {
+        jsonrpc: "2.0",
+        method: method,
+        params: params,
+        id: generateRandomString(16),
+      };
+      
+      const message = JSON.stringify(payload) + '\n';
+      let responseData = '';
+      
+      client.setTimeout(timeout);
+      
+      client.on('data', (data) => {
+        responseData += data.toString();
+        if (responseData.includes('\n')) {
+          try {
+            const response = JSON.parse(responseData.trim());
+            client.destroy();
+            
+            if (response.error) {
+              reject(new Error(`RPC Error: ${response.error.message} (Code: ${response.error.code})`));
+            } else {
+              resolve(response.result);
+            }
+          } catch (error) {
+            client.destroy();
+            reject(new Error(`Failed to parse response: ${error.message}`));
+          }
+        }
+      });
+      
+      client.on('error', (error) => {
+        client.destroy();
+        reject(error);
+      });
+      
+      client.on('timeout', () => {
+        client.destroy();
+        reject(new Error('TCP connection timeout'));
+      });
+      
+      client.connect(port, host, () => {
+        client.write(message);
+      });
+    });
+  }
+
   async callRpcMethod(serviceName, method, params = []) {
     if (!this.initialized) {
       throw new Error("ServiceManager not yet initialized");
@@ -227,32 +285,38 @@ class ServiceManager {
       try {
         logger.debug(`Calling service method: ${serviceName}.${method}`, {
           type: config.type,
+          protocol: config.protocol,
           params,
         });
 
         let result;
 
         if (config.type === "json-rpc") {
-          const payload = {
-            jsonrpc: "2.0",
-            method: method,
-            params: params,
-            id: generateRandomString(16),
-          };
+          if (config.protocol === "tcp") {
+            result = await this.callTcpRpc(config.host, config.port, method, params, config.timeout);
+          } else {
+            const payload = {
+              jsonrpc: "2.0",
+              method: method,
+              params: params,
+              id: generateRandomString(16),
+            };
 
-          const response = await client.post("", payload);
+            const response = await client.post("", payload);
 
-          if (response.data.error) {
-            throw new Error(
-              `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`
-            );
+            if (response.data.error) {
+              throw new Error(
+                `RPC Error: ${response.data.error.message} (Code: ${response.data.error.code})`
+              );
+            }
+
+            result = response.data.result;
           }
-
-          result = response.data.result;
         }
 
         logger.debug(`Service call successful: ${serviceName}.${method}`, {
           type: config.type,
+          protocol: config.protocol,
           method,
           params,
         });
@@ -269,6 +333,7 @@ class ServiceManager {
 
         logger.error(`Service call failed: ${serviceName}.${method}`, {
           type: config.type,
+          protocol: config.protocol,
           method,
           params,
           error: error.message,

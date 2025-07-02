@@ -13,10 +13,12 @@
     "bitcoinjs-lib": "^6.1.7",
     "decimal.js": "^10.5.0",
     "dotenv": "^16.5.0",
-    "express": "^5.1.0",
+    "express": "4.21.2",
+    "http-errors": "^2.0.0",
     "ioredis": "^5.6.1",
     "mongoose": "^8.15.0",
     "morgan": "^1.10.0",
+    "net": "^1.0.2",
     "winston": "^3.17.0",
     "zeromq": "^6.4.2"
   },

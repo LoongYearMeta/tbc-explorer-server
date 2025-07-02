@@ -82,21 +82,21 @@ async function startServer() {
       
       logger.info("Available API endpoints:");
       logger.info("  GET  /health                              - Health check");
-      logger.info("  GET  /api/address/:address                - Get address info");
-      logger.info("  GET  /api/address/:address/balance        - Get address balance");
-      logger.info("  GET  /api/address/:address/txids          - Get address transaction IDs");
-      logger.info("  GET  /api/block/height/:height            - Get block by height");
-      logger.info("  GET  /api/block/hash/:hash                - Get block by hash");
-      logger.info("  POST /api/block/heights                   - Get multiple blocks");
-      logger.info("  GET  /api/transaction/:txid               - Get transaction");
-      logger.info("  POST /api/transaction/batch               - Get multiple transactions");
-      logger.info("  GET  /api/chain/                          - Get blockchain info");
-      logger.info("  GET  /api/chain/mining                    - Get mining info");
-      logger.info("  GET  /api/chain/txstats/:count            - Get transaction stats");
-      logger.info("  GET  /api/chain/status                    - Get chain status");
-      logger.info("  GET  /api/mempool/                        - Get raw mempool");
-      logger.info("  GET  /api/mempool/info                    - Get mempool info");
-      logger.info("  GET  /api/mempool/count                   - Get mempool count");
+      logger.info("  GET  /address/:address                - Get address info");
+      logger.info("  GET  /address/:address/balance        - Get address balance");
+      logger.info("  GET  /address/:address/txids          - Get address transaction IDs");
+      logger.info("  GET  /block/height/:height            - Get block by height");
+      logger.info("  GET  /block/hash/:hash                - Get block by hash");
+      logger.info("  POST /block/heights                   - Get multiple blocks");
+      logger.info("  GET  /transaction/:txid               - Get transaction");
+      logger.info("  POST /transaction/batch               - Get multiple transactions");
+      logger.info("  GET  /chain/                          - Get blockchain info");
+      logger.info("  GET  /chain/mining                    - Get mining info");
+      logger.info("  GET  /chain/txstats/:count            - Get transaction stats");
+      logger.info("  GET  /chain/status                    - Get chain status");
+      logger.info("  GET  /mempool/                        - Get raw mempool");
+      logger.info("  GET  /mempool/info                    - Get mempool info");
+      logger.info("  GET  /mempool/count                   - Get mempool count");
     });
   } catch (error) {
     logger.error("Application startup failed", {

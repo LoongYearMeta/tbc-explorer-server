@@ -6,6 +6,7 @@ const servicesConfig = {
   nodeRpc: {
     name: "node-rpc",
     type: "json-rpc",
+    protocol: "http",
     host: process.env.NODE_RPC_HOST || "localhost",
     port: process.env.NODE_RPC_PORT || 8332,
     path: process.env.NODE_RPC_PATH || "",
@@ -20,6 +21,7 @@ const servicesConfig = {
   electrumxRpc: {
     name: "electrumx-rpc",
     type: "json-rpc",
+    protocol: "tcp",
     host: process.env.ELECTRUMX_RPC_HOST || "localhost",
     port: process.env.ELECTRUMX_RPC_PORT || 50002,
     path: process.env.ELECTRUMX_RPC_PATH || "",
@@ -28,7 +30,9 @@ const servicesConfig = {
     username: process.env.ELECTRUMX_RPC_USERNAME || "",
     password: process.env.ELECTRUMX_RPC_PASSWORD || "",
     get url() {
-      return `http://${this.host}:${this.port}${this.path}`;
+      return this.protocol === "tcp" 
+        ? `tcp://${this.host}:${this.port}`
+        : `http://${this.host}:${this.port}${this.path}`;
     },
   },
 };
