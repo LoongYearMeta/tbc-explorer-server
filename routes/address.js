@@ -1,4 +1,5 @@
 import express from "express";
+
 import serviceManager from "../services/ServiceManager.js";
 import logger from "../config/logger.js";
 
@@ -15,7 +16,7 @@ router.get("/:address/balance", async (req, res, next) => {
 
     const balance = await serviceManager.getAddressBalance(address);
     
-    res.json({
+    res.status(200).json({
       address,
       balance,
       timestamp: new Date().toISOString()
@@ -36,7 +37,7 @@ router.get("/:address/txids", async (req, res, next) => {
 
     const result = await serviceManager.getAddressTransactionIds(address);
     
-    res.json({
+    res.status(200).json({
       ...result,
       timestamp: new Date().toISOString()
     });
@@ -59,7 +60,7 @@ router.get("/:address", async (req, res, next) => {
       serviceManager.getAddressTransactionIds(address)
     ]);
     
-    res.json({
+    res.status(200).json({
       address,
       balance: balance.confirmed || 0,
       unconfirmed: balance.unconfirmed || 0,

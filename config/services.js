@@ -35,6 +35,20 @@ const servicesConfig = {
         : `http://${this.host}:${this.port}${this.path}`;
     },
   },
+  zeromq: {
+    name: "zeromq",
+    type: "zeromq",
+    host: process.env.ZMQ_HOST || "localhost",
+    enabled: process.env.ZMQ_ENABLED !== 'false',
+    reconnectInterval: parseInt(process.env.ZMQ_RECONNECT_INTERVAL) || 5000,
+    subscriptions: {
+      hashblock: {
+        enabled: process.env.ZMQ_HASHBLOCK_ENABLED !== 'false',
+        port: parseInt(process.env.ZMQ_HASHBLOCK_PORT) || 28332,
+        topic: "hashblock"
+      }
+    }
+  }
 };
 
 export default servicesConfig;

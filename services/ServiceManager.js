@@ -11,11 +11,13 @@ import {
   getBlockTotalFeesFromCoinbaseTxAndBlockHeight,
   getMinerFromCoinbaseTx,
 } from "../lib/util.js";
+import ZeroMQService from "./zeromq.js";
 
 class ServiceManager {
   constructor() {
     this.rpcClients = {};
     this.initialized = false;
+    this.zmqService = new ZeroMQService(servicesConfig.zeromq);
 
     this.performanceConfig = {
       defaultBatchSize: parseInt(process.env.BATCH_SIZE) || 100,
@@ -47,6 +49,7 @@ class ServiceManager {
     try {
       logger.info("Initializing external service connections...");
       await this.initializeRpcClients();
+      await this.zmqService.start();
       this.initialized = true;
       logger.info("All external service connections initialized successfully");
     } catch (error) {
@@ -744,6 +747,61 @@ class ServiceManager {
     return null;
   }
 
+  async getRawTransactionHex(txid) {
+    const results = await this.getRawTransactionsHex([txid]);
+    if (results && results.length > 0) {
+      return results[0];
+    }
+    return null;
+  }
+
+  async getRawTransactionsHex(txids) {
+    if (!txids || txids.length === 0) {
+      return [];
+    }
+
+    const results = new Array(txids.length);
+    const requests = [];
+    const indexMap = new Map();
+
+    for (let i = 0; i < txids.length; i++) {
+      const txid = txids[i];
+      if (txid) {
+        const requestIndex = requests.length;
+        indexMap.set(requestIndex, i);
+        requests.push({
+          method: "getrawtransaction",
+          parameters: [txid, 0],
+        });
+      }
+    }
+
+    try {
+      if (requests.length > 0) {
+        const optimalBatchSize = this.calculateOptimalBatchSize(requests.length);
+        const batches = splitArrayIntoChunks(requests, optimalBatchSize);
+        const batchResults = await this.executeBatchesSequentially(batches);
+
+        let resultIndex = 0;
+        for (const result of batchResults) {
+          if (result) {
+            const originalIndex = indexMap.get(resultIndex);
+            results[originalIndex] = result;
+          }
+          resultIndex++;
+        }
+      }
+
+      return results;
+    } catch (error) {
+      logger.error("Error in getRawTransactionsHex", { 
+        error: error.message,
+        txids: txids.length > 10 ? `${txids.slice(0, 10).join(', ')}... (${txids.length} total)` : txids.join(', ')
+      });
+      throw error;
+    }
+  }
+
   async getRawTransactions(txids) {
     const genesisCoinbaseTransactionId =
       coinConfig.genesisCoinbaseTransactionId;
@@ -885,6 +943,7 @@ class ServiceManager {
         name,
         url: this.rpcClients[name].config.url,
       })),
+      zeromq: this.zmqService.getStatus(),
       batchRetryConfig: this.batchRetryConfig,
       performanceConfig: this.performanceConfig,
       circuitBreaker: {
@@ -892,6 +951,10 @@ class ServiceManager {
         isOpen: this.isCircuitBreakerOpen()
       },
     };
+  }
+
+  getZeroMQService() {
+    return this.zmqService;
   }
 }
 

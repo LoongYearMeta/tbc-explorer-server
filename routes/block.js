@@ -1,4 +1,5 @@
 import express from "express";
+
 import serviceManager from "../services/ServiceManager.js";
 import logger from "../config/logger.js";
 
@@ -30,7 +31,7 @@ router.get("/height/:height", async (req, res, next) => {
       });
     }
     
-    res.json({
+    res.status(200).json({
       block,
       timestamp: new Date().toISOString()
     });
@@ -58,7 +59,7 @@ router.get("/hash/:hash", async (req, res, next) => {
       });
     }
     
-    res.json({
+    res.status(200).json({
       block,
       timestamp: new Date().toISOString()
     });
@@ -78,6 +79,13 @@ router.post("/heights", async (req, res, next) => {
       });
     }
 
+    if (heights.length > 100) {
+      return res.status(400).json({
+        error: "Maximum 100 block heights allowed per request",
+        timestamp: new Date().toISOString()
+      });
+    }
+
     const validHeights = heights.filter(h => Number.isInteger(h) && h >= 0);
     if (validHeights.length !== heights.length) {
       return res.status(400).json({
@@ -93,7 +101,7 @@ router.post("/heights", async (req, res, next) => {
 
     const blocks = await serviceManager.getBlocksByHeight(heights);
     
-    res.json({
+    res.status(200).json({
       blocks,
       total: blocks.length,
       timestamp: new Date().toISOString()

@@ -1,4 +1,5 @@
 import express from "express";
+
 import serviceManager from "../services/ServiceManager.js";
 import logger from "../config/logger.js";
 
@@ -12,7 +13,7 @@ router.get("/", async (req, res, next) => {
 
     const blockchainInfo = await serviceManager.getBlockchainInfo();
     
-    res.json({
+    res.status(200).json({
       blockchainInfo,
       timestamp: new Date().toISOString()
     });
@@ -29,7 +30,7 @@ router.get("/mining", async (req, res, next) => {
 
     const miningInfo = await serviceManager.getMiningInfo();
     
-    res.json({
+    res.status(200).json({
       miningInfo,
       timestamp: new Date().toISOString()
     });
@@ -56,7 +57,7 @@ router.get("/txstats/:blockCount?", async (req, res, next) => {
 
     const txStats = await serviceManager.getChainTxStats(blockCount);
     
-    res.json({
+    res.status(200).json({
       txStats,
       blockCount: blockCount || "default",
       timestamp: new Date().toISOString()
@@ -77,7 +78,7 @@ router.get("/status", async (req, res, next) => {
       serviceManager.getMiningInfo()
     ]);
     
-    res.json({
+    res.status(200).json({
       blockchain: blockchainInfo,
       mining: miningInfo,
       timestamp: new Date().toISOString()

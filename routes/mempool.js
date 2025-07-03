@@ -1,4 +1,5 @@
 import express from "express";
+
 import serviceManager from "../services/ServiceManager.js";
 import logger from "../config/logger.js";
 
@@ -12,7 +13,7 @@ router.get("/info", async (req, res, next) => {
 
     const mempoolInfo = await serviceManager.getMempoolInfo();
     
-    res.json({
+    res.status(200).json({
       mempoolInfo,
       timestamp: new Date().toISOString()
     });
@@ -29,7 +30,7 @@ router.get("/", async (req, res, next) => {
 
     const rawMempool = await serviceManager.getRawMempool();
     
-    res.json({
+    res.status(200).json({
       mempool: rawMempool,
       count: Object.keys(rawMempool || {}).length,
       timestamp: new Date().toISOString()
@@ -47,7 +48,7 @@ router.get("/count", async (req, res, next) => {
 
     const mempoolInfo = await serviceManager.getMempoolInfo();
     
-    res.json({
+    res.status(200).json({
       count: mempoolInfo?.size || 0,
       timestamp: new Date().toISOString()
     });
