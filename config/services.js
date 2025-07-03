@@ -46,6 +46,11 @@ const servicesConfig = {
         enabled: process.env.ZMQ_HASHBLOCK_ENABLED !== 'false',
         port: parseInt(process.env.ZMQ_HASHBLOCK_PORT) || 28332,
         topic: "hashblock"
+      },
+      hashtx: {
+        enabled: process.env.ZMQ_HASHTX_ENABLED !== 'false',
+        port: parseInt(process.env.ZMQ_HASHTX_PORT) || 28333,
+        topic: "hashtx"
       }
     }
   }

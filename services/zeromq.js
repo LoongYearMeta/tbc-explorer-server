@@ -1,6 +1,7 @@
 import zmq from "zeromq";
 
 import logger from "../config/logger.js";
+import { Block } from "../models/block.js";
 
 class ZeroMQService {
   constructor(config) {
@@ -10,9 +11,15 @@ class ZeroMQService {
     this.reconnectTimeouts = new Map();
     this.messageHandlers = new Map();
     this.stats = {
-      hashblock: { received: 0, errors: 0, lastReceived: null }
+      hashblock: { received: 0, errors: 0, lastReceived: null },
+      hashtx: { received: 0, errors: 0, lastReceived: null }
     };
+    this.serviceManager = null; 
     this.setupDefaultHandlers();
+  }
+
+  setServiceManager(serviceManager) {
+    this.serviceManager = serviceManager;
   }
 
   setupDefaultHandlers() {
@@ -21,7 +28,19 @@ class ZeroMQService {
       logger.info(`[ZMQ] New block hash: ${blockHash}`);
       this.stats.hashblock.received++;
       this.stats.hashblock.lastReceived = new Date();
-      this.onNewBlockHash(blockHash);
+      this.onNewBlockHash(blockHash).catch(error => {
+        logger.error(`[ZMQ] Error in onNewBlockHash handler: ${error.message}`);
+      });
+    });
+
+    this.messageHandlers.set('hashtx', (topic, message) => {
+      const txHash = message.toString('hex');
+      logger.info(`[ZMQ] New transaction hash: ${txHash}`);
+      this.stats.hashtx.received++;
+      this.stats.hashtx.lastReceived = new Date();
+      this.onNewTransactionHash(txHash).catch(error => {
+        logger.error(`[ZMQ] Error in onNewTransactionHash handler: ${error.message}`);
+      });
     });
   }
 
@@ -217,13 +236,86 @@ class ZeroMQService {
     };
   }
 
-  /**
-   * 业务逻辑方法 - 新区块哈希处理
-   */
-  onNewBlockHash(blockHash) {
-    // 这里可以添加自定义业务逻辑
-    // 例如：触发缓存更新、通知WebSocket客户端、更新统计信息等
-    logger.debug(`[ZMQ] Processing new block hash: ${blockHash}`);
+  async onNewBlockHash(blockHash) {
+    try {
+      logger.info(`[ZMQ] Processing new block hash: ${blockHash}`);
+      
+      const existingBlock = await Block.findOne({ hash: blockHash });
+      if (existingBlock) {
+        logger.debug(`[ZMQ] Block ${blockHash} already exists in database`);
+        return;
+      }
+      
+      if (!this.serviceManager) {
+        logger.warn(`[ZMQ] ServiceManager not set, cannot fetch block details for ${blockHash}`);
+        return;
+      }
+      
+      logger.debug(`[ZMQ] Fetching block details for ${blockHash}`);
+      const blockDetails = await this.serviceManager.getBlockByHash(blockHash);
+      
+      if (!blockDetails) {
+        logger.error(`[ZMQ] Failed to fetch block details for ${blockHash}`);
+        return;
+      }
+      
+      const blockDoc = new Block({
+        hash: blockDetails.hash,
+        height: blockDetails.height,
+        confirmations: blockDetails.confirmations,
+        size: blockDetails.size,
+        version: blockDetails.version,
+        versionHex: blockDetails.versionHex,
+        merkleroot: blockDetails.merkleroot,
+        num_tx: blockDetails.num_tx,
+        time: blockDetails.time,
+        mediantime: blockDetails.mediantime,
+        nonce: blockDetails.nonce,
+        bits: blockDetails.bits,
+        difficulty: blockDetails.difficulty,
+        chainwork: blockDetails.chainwork,
+        previousblockhash: blockDetails.previousblockhash,
+        nextblockhash: blockDetails.nextblockhash,
+        tx: blockDetails.tx,
+        coinbaseTx: blockDetails.coinbaseTx,
+        totalFees: blockDetails.totalFees,
+        miner: blockDetails.miner
+      });
+      
+      await blockDoc.save();
+      logger.info(`[ZMQ] Successfully saved block ${blockHash} (height: ${blockDetails.height}) to database`);
+      
+    } catch (error) {
+      if (error.code === 11000) {
+        logger.debug(`[ZMQ] Block ${blockHash} already exists (concurrent write), skipping`);
+      } else {
+        logger.error(`[ZMQ] Error processing new block hash ${blockHash}`, {
+          error: error.message,
+          stack: error.stack
+        });
+      }
+    }
+  }
+
+  async onNewTransactionHash(txHash) {
+    try {
+      logger.info(`[ZMQ] Processing new transaction hash: ${txHash}`);
+      
+      // TODO: 实现交易哈希处理逻辑
+      // 可以在这里添加：
+      // 1. 检查交易是否已存在
+      // 2. 获取交易详情
+      // 3. 保存到数据库
+      // 4. 触发相关业务逻辑
+      
+      logger.debug(`[ZMQ] Transaction hash processing not implemented yet: ${txHash}`);
+      
+    } catch (error) {
+      logger.error(`[ZMQ] Error processing new transaction hash ${txHash}`, {
+        error: error.message,
+        stack: error.stack
+      });
+    }
   }
 }
 

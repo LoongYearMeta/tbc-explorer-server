@@ -49,6 +49,7 @@ class ServiceManager {
     try {
       logger.info("Initializing external service connections...");
       await this.initializeRpcClients();
+      this.zmqService.setServiceManager(this);
       await this.zmqService.start();
       this.initialized = true;
       logger.info("All external service connections initialized successfully");

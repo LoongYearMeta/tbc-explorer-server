@@ -3,3 +3,4 @@ logs
 .env
 docs
 examples
+.DS_Store

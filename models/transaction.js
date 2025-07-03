@@ -1,12 +1,13 @@
 import mongoose from "mongoose";
 
 const transactionSchema = new mongoose.Schema({
-  txid: { type: String, required: true },
-  raw: { type: String, required: true },
-  blockHeight: { type: Number, required: true },
-  blockHash: { type: String, required: true },
-  timestamp: { type: Number, required: true },
-  size: { type: Number, required: true },
+  txid: { type: String, required: true, unique: true, index: true },
+  raw: { type: String, required: true }
+}, {
+  timestamps: true,
+  collection: 'transactions'
 });
+
+transactionSchema.index({ txid: 1 });
 
 export const Transaction = mongoose.model("Transaction", transactionSchema);

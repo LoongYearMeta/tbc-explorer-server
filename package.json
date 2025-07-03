@@ -1,28 +1,27 @@
 {
   "name": "tbc-explorer",
   "version": "1.0.0",
-  "description": "TBC Explorer",
+  "description": "TBC Blockchain Explorer",
   "main": "index.js",
+  "type": "module",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "worker": "node workers/blockPreprocessorWorker.js"
   },
-  "type": "module",
   "dependencies": {
-    "axios": "^1.10.0",
-    "bitcoinjs-lib": "^6.1.7",
-    "decimal.js": "^10.5.0",
-    "dotenv": "^16.5.0",
-    "express": "4.21.2",
+    "axios": "^1.3.4",
+    "bitcoinjs-lib": "^6.1.0",
+    "create-error": "^0.3.1",
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2",
     "http-errors": "^2.0.0",
-    "ioredis": "^5.6.1",
-    "mongoose": "^8.15.0",
-    "morgan": "^1.10.0",
-    "net": "^1.0.2",
-    "winston": "^3.17.0",
-    "zeromq": "^6.4.2"
+    "mongodb": "^5.1.0",
+    "mongoose": "^7.0.3",
+    "winston": "^3.8.2",
+    "zeromq": "^6.0.0-beta.6"
   },
   "devDependencies": {
-    "nodemon": "^3.1.9"
+    "nodemon": "^2.0.20"
   }
 }
