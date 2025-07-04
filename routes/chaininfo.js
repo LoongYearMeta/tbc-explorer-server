@@ -7,32 +7,18 @@ const router = express.Router();
 
 router.get("/", async (req, res, next) => {
   try {
-    logger.info("Blockchain info request", {
+    logger.info("Chain status request", {
       ip: req.ip,
     });
 
-    const blockchainInfo = await serviceManager.getBlockchainInfo();
-    
-    res.status(200).json({
-      blockchainInfo,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    next(error);
-  }
-});
+    const [blockchainInfo, miningInfo] = await Promise.all([
+      serviceManager.getBlockchainInfo(),
+      serviceManager.getMiningInfo()
+    ]);
 
-router.get("/mining", async (req, res, next) => {
-  try {
-    logger.info("Mining info request", {
-      ip: req.ip,
-    });
-
-    const miningInfo = await serviceManager.getMiningInfo();
-    
     res.status(200).json({
-      miningInfo,
-      timestamp: new Date().toISOString()
+      blockchain: blockchainInfo,
+      mining: miningInfo,
     });
   } catch (error) {
     next(error);
@@ -42,46 +28,23 @@ router.get("/mining", async (req, res, next) => {
 router.get("/txstats/:blockCount?", async (req, res, next) => {
   try {
     const blockCount = req.params.blockCount ? parseInt(req.params.blockCount) : undefined;
-    
+
     if (blockCount !== undefined && (isNaN(blockCount) || blockCount <= 0)) {
       return res.status(400).json({
-        error: "Block count must be a positive integer",
-        timestamp: new Date().toISOString()
+        error: "Block count must be a positive integer"
       });
     }
-    
+
     logger.info("Chain transaction stats request", {
       blockCount,
       ip: req.ip,
     });
 
     const txStats = await serviceManager.getChainTxStats(blockCount);
-    
+
     res.status(200).json({
       txStats,
-      blockCount: blockCount || "default",
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.get("/status", async (req, res, next) => {
-  try {
-    logger.info("Chain status request", {
-      ip: req.ip,
-    });
-
-    const [blockchainInfo, miningInfo] = await Promise.all([
-      serviceManager.getBlockchainInfo(),
-      serviceManager.getMiningInfo()
-    ]);
-    
-    res.status(200).json({
-      blockchain: blockchainInfo,
-      mining: miningInfo,
-      timestamp: new Date().toISOString()
+      blockCount: blockCount || "default"
     });
   } catch (error) {
     next(error);

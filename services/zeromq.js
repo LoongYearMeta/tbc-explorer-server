@@ -285,8 +285,6 @@ class ZeroMQService {
       
       await blockDoc.save();
       logger.info(`[ZMQ] Successfully saved block ${blockHash} (height: ${blockDetails.height}) to database`);
-
-      // Process transactions from the new block
       await this.processBlockTransactions(blockDetails);
       
     } catch (error) {
@@ -304,17 +302,12 @@ class ZeroMQService {
   async processBlockTransactions(blockDetails) {
     try {
       const { height, tx: txIds } = blockDetails;
-      
-      // First, check if we need to clean up old transactions
-      const MAX_BLOCKS = 10000;  // When reaching this, trigger cleanup
-      const TARGET_BLOCKS = 9000; // Keep this many blocks after cleanup
-      
-      // Get the actual count of distinct block heights in the database
+      const MAX_BLOCKS = 10000;  
+      const TARGET_BLOCKS = 9000; 
       const currentBlockCount = await Transaction.getDistinctBlockCount();
       
       if (currentBlockCount >= MAX_BLOCKS) {
-        // When we reach 10000 blocks, keep only the newest 9000 blocks
-        const sortedHeights = await Transaction.getDistinctBlockHeights(-1); // Sort descending
+        const sortedHeights = await Transaction.getDistinctBlockHeights(-1); 
         const blocksToKeep = sortedHeights.slice(0, TARGET_BLOCKS);
         const minHeightToKeep = Math.min(...blocksToKeep);
         
@@ -324,11 +317,7 @@ class ZeroMQService {
         
         logger.info(`[ZMQ] Cleaned up ${deleteResult.deletedCount} transactions from old blocks, maintaining ${TARGET_BLOCKS} newest blocks`);
       }
-
-      // Process new transactions
       logger.info(`[ZMQ] Processing ${txIds.length} transactions from block ${height}`);
-
-      // Get existing transactions to avoid duplicates
       const existingTransactions = await Transaction.find({ txid: { $in: txIds } }).select('txid');
       const existingTxIds = new Set(existingTransactions.map(tx => tx.txid));
       const missingTxIds = txIds.filter(txid => !existingTxIds.has(txid));
@@ -338,7 +327,6 @@ class ZeroMQService {
         return;
       }
 
-      // Process transactions in batches
       const BATCH_SIZE = 500;
       const batches = [];
       for (let i = 0; i < missingTxIds.length; i += BATCH_SIZE) {
@@ -453,7 +441,6 @@ class ZeroMQService {
       if (subscriptionData.subscriber) {
         try {
           const closePromise = subscriptionData.subscriber.close();
-          // Only add to promises if close() returns a Promise
           if (closePromise && typeof closePromise.catch === 'function') {
             closePromises.push(
               closePromise.catch(error => {

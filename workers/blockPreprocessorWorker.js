@@ -72,7 +72,6 @@ class BlockPreprocessorWorker {
       await connectDB();
       await serviceManager.initialize();
       
-      // 加载配置
       const config = await this.loadConfig();
       this.startHeight = config.lastProcessedHeight;
       
@@ -162,8 +161,6 @@ class BlockPreprocessorWorker {
             batchSuccess = true;
             this.stats.currentBatch++;
             this.stats.totalProcessed += heights.length;
-
-            // 更新配置文件中的进度
             await this.updateProgress(endHeight);
 
             if (this.stats.currentBatch % 10 === 0) {
@@ -327,16 +324,12 @@ class BlockPreprocessorWorker {
     try {
       logger.info("BlockPreprocessorWorker: Starting transaction preprocessing for latest 1000 blocks");
 
-      // First, check if we need to clean up old transactions (same as ZeroMQ)
-      const MAX_BLOCKS = 10000;  // When reaching this, trigger cleanup
-      const TARGET_BLOCKS = 9000; // Keep this many blocks after cleanup
+      const MAX_BLOCKS = 10000;  
+      const TARGET_BLOCKS = 9000; 
       
-      // Get the actual count of distinct block heights in the database
       const currentBlockCount = await Transaction.getDistinctBlockCount();
-      
       if (currentBlockCount >= MAX_BLOCKS) {
-        // When we reach 10000 blocks, keep only the newest 9000 blocks
-        const sortedHeights = await Transaction.getDistinctBlockHeights(-1); // Sort descending
+        const sortedHeights = await Transaction.getDistinctBlockHeights(-1); 
         const blocksToKeep = sortedHeights.slice(0, TARGET_BLOCKS);
         const minHeightToKeep = Math.min(...blocksToKeep);
         
@@ -349,7 +342,7 @@ class BlockPreprocessorWorker {
 
       const blockchainInfo = await serviceManager.getBlockchainInfo();
       const latestHeight = blockchainInfo.blocks;
-      const startHeight = Math.max(0, latestHeight - 999); // Latest 1000 blocks
+      const startHeight = Math.max(0, latestHeight - 999); 
 
       logger.info("BlockPreprocessorWorker: Transaction preprocessing range", {
         startHeight,
@@ -378,13 +371,11 @@ class BlockPreprocessorWorker {
         }
       }
 
-      // Step 1: Filter out blocks that are already completely processed
       const blocksToProcess = [];
       const completelyProcessedBlocks = [];
       
       logger.info("BlockPreprocessorWorker: Checking which blocks are already completely processed");
       
-      // Get all transaction IDs from all blocks
       const allBlockTxMap = new Map();
       for (const height of heights) {
         const block = blockMap.get(height);
@@ -393,20 +384,16 @@ class BlockPreprocessorWorker {
         }
       }
 
-      // Batch query to check which transactions already exist
       const allTxIds = Array.from(allBlockTxMap.values()).flat();
       const existingTransactions = await Transaction.find({ txid: { $in: allTxIds } }).select('txid').lean();
       const existingTxIds = new Set(existingTransactions.map(tx => tx.txid));
 
-      // Determine which blocks need processing
       for (const [height, txIds] of allBlockTxMap) {
         const missingTxIds = txIds.filter(txid => !existingTxIds.has(txid));
         
         if (missingTxIds.length === 0) {
-          // All transactions in this block already exist
           completelyProcessedBlocks.push(height);
         } else {
-          // This block has missing transactions
           blocksToProcess.push({
             height,
             totalTxIds: txIds,
@@ -419,10 +406,9 @@ class BlockPreprocessorWorker {
         totalBlocks: allBlockTxMap.size,
         completelyProcessedBlocks: completelyProcessedBlocks.length,
         blocksToProcess: blocksToProcess.length,
-        skippedBlocks: completelyProcessedBlocks.sort((a, b) => b - a).slice(0, 10) // Show first 10 skipped blocks
+        skippedBlocks: completelyProcessedBlocks.sort((a, b) => b - a).slice(0, 10)
       });
 
-      // Step 2: Process only the blocks that need processing
       let totalProcessed = 0;
       let totalSaved = 0;
       let totalErrors = 0;
@@ -440,7 +426,6 @@ class BlockPreprocessorWorker {
         processedBlocks++;
       }
 
-      // Add stats for completely processed blocks
       for (const height of completelyProcessedBlocks) {
         const block = blockMap.get(height);
         if (block && block.tx) {
@@ -473,14 +458,10 @@ class BlockPreprocessorWorker {
 
   async processBlockTransactions(blockHeight, txIds, missingTxIds = null) {
     try {
-      // If missingTxIds is provided, use it directly (optimization from preprocessTransactions)
       let actualMissingTxIds = missingTxIds;
-      
       if (!actualMissingTxIds) {
-        // Fallback to original logic if missingTxIds not provided
         logger.debug(`BlockPreprocessorWorker: Processing ${txIds.length} transactions from block ${blockHeight}`);
 
-        // Get existing transactions to avoid duplicates
         const existingTransactions = await Transaction.find({ txid: { $in: txIds } }).select('txid');
         const existingTxIds = new Set(existingTransactions.map(tx => tx.txid));
         actualMissingTxIds = txIds.filter(txid => !existingTxIds.has(txid));
@@ -496,8 +477,6 @@ class BlockPreprocessorWorker {
           totalErrors: 0
         };
       }
-
-      // Process transactions in batches (same as ZeroMQ)
       const BATCH_SIZE = 500;
       const batches = [];
       for (let i = 0; i < actualMissingTxIds.length; i += BATCH_SIZE) {
@@ -521,7 +500,7 @@ class BlockPreprocessorWorker {
               txDocs.push({
                 txid: txid,
                 raw: rawTx,
-                blockHeight: blockHeight // Include blockHeight like ZeroMQ
+                blockHeight: blockHeight 
               });
             } else {
               logger.warn(`BlockPreprocessorWorker: Failed to get raw transaction for txid: ${txid}`);
@@ -597,7 +576,6 @@ class BlockPreprocessorWorker {
       averageTimePerBatch: `${Math.floor(duration / this.stats.currentBatch)}ms`
     });
 
-    // 最终更新配置文件
     try {
       const config = await this.loadConfig();
       config.lastProcessedHeight = this.stats.latestHeight;

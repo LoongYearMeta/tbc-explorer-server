@@ -127,8 +127,6 @@ async function startServer() {
       logger.info("Available API endpoints:");
       logger.info("  GET  /health                              - Health check");
       logger.info("  GET  /address/:address                - Get address info");
-      logger.info("  GET  /address/:address/balance        - Get address balance");
-      logger.info("  GET  /address/:address/txids          - Get address transaction IDs");
       logger.info("  GET  /block/height/:height            - Get block by height");
       logger.info("  GET  /block/hash/:hash                - Get block by hash");
       logger.info("  GET  /block/latest                    - Get latest 10 blocks");
@@ -137,13 +135,10 @@ async function startServer() {
       logger.info("  GET  /transaction/:txid/raw           - Get raw transaction (hex)");
       logger.info("  POST /transaction/batch/raw           - Get multiple raw transactions (max 500)");
       logger.info("  GET  /chain                           - Get blockchain info");
-      logger.info("  GET  /chain/mining                    - Get mining info");
       logger.info("  GET  /chain/txstats/:count            - Get transaction stats");
-      logger.info("  GET  /chain/status                    - Get chain status");
       logger.info("  GET  /mempool                         - Get raw mempool");
       logger.info("  GET  /mempool/info                    - Get mempool info");
-      logger.info("  GET  /mempool/count                   - Get mempool count");
-      
+
       logger.info("ZeroMQ subscriptions:");
       logger.info("  tcp://0.0.0.0:28332                   - Block hash notifications");
       logger.info("  tcp://0.0.0.0:28333                   - Transaction hash notifications");

@@ -647,7 +647,7 @@ class ServiceManager {
   }
 
   async getRawMempool() {
-    return this.getRpcDataWithParams("getrawmempool", [true]);
+    return this.getRpcDataWithParams("getrawmempool", [false]);
   }
 
   async getChainTxStats(blockCount) {

@@ -12,10 +12,9 @@ router.get("/info", async (req, res, next) => {
     });
 
     const mempoolInfo = await serviceManager.getMempoolInfo();
-    
+
     res.status(200).json({
-      mempoolInfo,
-      timestamp: new Date().toISOString()
+      mempoolInfo
     });
   } catch (error) {
     next(error);
@@ -29,28 +28,10 @@ router.get("/", async (req, res, next) => {
     });
 
     const rawMempool = await serviceManager.getRawMempool();
-    
-    res.status(200).json({
-      mempool: rawMempool,
-      count: Object.keys(rawMempool || {}).length,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    next(error);
-  }
-});
 
-router.get("/count", async (req, res, next) => {
-  try {
-    logger.info("Mempool count request", {
-      ip: req.ip,
-    });
-
-    const mempoolInfo = await serviceManager.getMempoolInfo();
-    
     res.status(200).json({
-      count: mempoolInfo?.size || 0,
-      timestamp: new Date().toISOString()
+      txids: rawMempool || [],
+      count: Array.isArray(rawMempool) ? rawMempool.length : 0,
     });
   } catch (error) {
     next(error);

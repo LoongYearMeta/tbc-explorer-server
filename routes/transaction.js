@@ -12,8 +12,7 @@ router.get("/:txid", async (req, res, next) => {
 
     if (!/^[a-fA-F0-9]{64}$/.test(txid)) {
       return res.status(400).json({
-        error: "Invalid transaction ID format",
-        timestamp: new Date().toISOString()
+        error: "Invalid transaction ID format"
       });
     }
 
@@ -27,14 +26,12 @@ router.get("/:txid", async (req, res, next) => {
     if (!transaction) {
       return res.status(404).json({
         error: "Transaction not found",
-        txid,
-        timestamp: new Date().toISOString()
+        txid
       });
     }
 
     res.status(200).json({
-      transaction,
-      timestamp: new Date().toISOString()
+      transaction
     });
   } catch (error) {
     next(error);
@@ -47,8 +44,7 @@ router.get("/:txid/raw", async (req, res, next) => {
 
     if (!/^[a-fA-F0-9]{64}$/.test(txid)) {
       return res.status(400).json({
-        error: "Invalid transaction ID format",
-        timestamp: new Date().toISOString()
+        error: "Invalid transaction ID format"
       });
     }
 
@@ -72,7 +68,6 @@ router.get("/:txid/raw", async (req, res, next) => {
       return res.status(404).json({
         error: "Transaction not found",
         txid,
-        timestamp: new Date().toISOString()
       });
     }
 
@@ -91,15 +86,13 @@ router.post("/batch/raw", async (req, res, next) => {
 
     if (!Array.isArray(txids) || txids.length === 0) {
       return res.status(400).json({
-        error: "txids array is required and cannot be empty",
-        timestamp: new Date().toISOString()
+        error: "txids array is required and cannot be empty"
       });
     }
 
     if (txids.length > 500) {
       return res.status(400).json({
-        error: "Maximum 500 transaction IDs allowed per request",
-        timestamp: new Date().toISOString()
+        error: "Maximum 500 transaction IDs allowed per request"
       });
     }
 
@@ -107,8 +100,7 @@ router.post("/batch/raw", async (req, res, next) => {
     if (invalidTxids.length > 0) {
       return res.status(400).json({
         error: "Invalid transaction ID format",
-        invalidTxids,
-        timestamp: new Date().toISOString()
+        invalidTxids
       });
     }
 

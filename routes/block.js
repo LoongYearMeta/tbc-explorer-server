@@ -38,8 +38,7 @@ router.get("/height/:height", async (req, res, next) => {
 
     if (isNaN(height) || height < 0) {
       return res.status(400).json({
-        error: "Invalid block height",
-        timestamp: new Date().toISOString()
+        error: "Invalid block height"
       });
     }
 
