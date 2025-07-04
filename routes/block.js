@@ -1,6 +1,7 @@
 import express from "express";
 
 import serviceManager from "../services/ServiceManager.js";
+import redisService from "../services/RedisService.js";
 import logger from "../config/logger.js";
 import { Block } from "../models/block.js";
 
@@ -47,42 +48,60 @@ router.get("/height/:height", async (req, res, next) => {
       ip: req.ip,
     });
 
-    let block = await Block.findOne({ height }).lean();
-    if (!block) {
-      logger.debug(`Block height ${height} not found in database, fetching from RPC`);
-      block = await serviceManager.getBlockByHeight(height);
+    let block = null;
 
+    try {
+      const cacheKey = `blocks:recent:${height}`;
+      const cachedBlock = await redisService.getJSON(cacheKey);
+      if (cachedBlock) {
+        block = cachedBlock;
+        logger.debug(`Block height ${height} found in Redis cache`);
+      }
+    } catch (error) {
+      logger.warn(`Redis lookup failed for block height ${height}`, { error: error.message });
+    }
+
+    if (!block) {
+      block = await Block.findOne({ height }).lean();
       if (block) {
-        try {
-          const blockDoc = new Block({
-            hash: block.hash,
-            height: block.height,
-            confirmations: block.confirmations,
-            size: block.size,
-            version: block.version,
-            versionHex: block.versionHex,
-            merkleroot: block.merkleroot,
-            num_tx: block.num_tx,
-            time: block.time,
-            mediantime: block.mediantime,
-            nonce: block.nonce,
-            bits: block.bits,
-            difficulty: block.difficulty,
-            chainwork: block.chainwork,
-            previousblockhash: block.previousblockhash,
-            nextblockhash: block.nextblockhash,
-            tx: block.tx,
-            coinbaseTx: block.coinbaseTx,
-            totalFees: block.totalFees,
-            miner: block.miner
-          });
-          await blockDoc.save();
-          logger.debug(`Saved block height ${height} to database`);
-        } catch (saveError) {
-          if (saveError.code === 11000) {
-            logger.debug(`Block height ${height} already exists (concurrent write), skipping`);
-          } else {
-            logger.warn(`Failed to save block height ${height} to database: ${saveError.message}`);
+        logger.debug(`Block height ${height} found in database`);
+      } else {
+        logger.debug(`Block height ${height} not found in database, fetching from RPC`);
+        block = await serviceManager.getBlockByHeight(height);
+        if (block) {
+          logger.debug(`Block height ${height} fetched from RPC`);
+          
+          try {
+            const blockDoc = new Block({
+              hash: block.hash,
+              height: block.height,
+              confirmations: block.confirmations,
+              size: block.size,
+              version: block.version,
+              versionHex: block.versionHex,
+              merkleroot: block.merkleroot,
+              num_tx: block.num_tx,
+              time: block.time,
+              mediantime: block.mediantime,
+              nonce: block.nonce,
+              bits: block.bits,
+              difficulty: block.difficulty,
+              chainwork: block.chainwork,
+              previousblockhash: block.previousblockhash,
+              nextblockhash: block.nextblockhash,
+              tx: block.tx,
+              coinbaseTx: block.coinbaseTx,
+              totalFees: block.totalFees,
+              miner: block.miner
+            });
+            await blockDoc.save();
+            logger.debug(`Saved block height ${height} to database`);
+          } catch (saveError) {
+            if (saveError.code === 11000) {
+              logger.debug(`Block height ${height} already exists (concurrent write), skipping`);
+            } else {
+              logger.warn(`Failed to save block height ${height} to database: ${saveError.message}`);
+            }
           }
         }
       }
@@ -96,7 +115,7 @@ router.get("/height/:height", async (req, res, next) => {
     }
 
     res.status(200).json({
-      block: formatBlockResponse(block)
+      block: formatBlockResponse(block),
     });
   } catch (error) {
     next(error);
@@ -112,44 +131,63 @@ router.get("/hash/:hash", async (req, res, next) => {
       ip: req.ip,
     });
 
-    let block = await Block.findOne({ hash }).lean();
+    let block = null;
 
+    try {
+      const dbBlock = await Block.findOne({ hash }).select('height').lean();
+      if (dbBlock) {
+        const cacheKey = `blocks:recent:${dbBlock.height}`;
+        const cachedBlock = await redisService.getJSON(cacheKey);
+        if (cachedBlock && cachedBlock.hash === hash) {
+          block = cachedBlock;
+          logger.debug(`Block hash ${hash} found in Redis cache`);
+        }
+      }
+    } catch (error) {
+      logger.warn(`Redis lookup failed for block hash ${hash}`, { error: error.message });
+    }
 
     if (!block) {
-      logger.debug(`Block hash ${hash} not found in database, fetching from RPC`);
-      block = await serviceManager.getBlockByHash(hash);
-
+      block = await Block.findOne({ hash }).lean();
       if (block) {
-        try {
-          const blockDoc = new Block({
-            hash: block.hash,
-            height: block.height,
-            confirmations: block.confirmations,
-            size: block.size,
-            version: block.version,
-            versionHex: block.versionHex,
-            merkleroot: block.merkleroot,
-            num_tx: block.num_tx,
-            time: block.time,
-            mediantime: block.mediantime,
-            nonce: block.nonce,
-            bits: block.bits,
-            difficulty: block.difficulty,
-            chainwork: block.chainwork,
-            previousblockhash: block.previousblockhash,
-            nextblockhash: block.nextblockhash,
-            tx: block.tx,
-            coinbaseTx: block.coinbaseTx,
-            totalFees: block.totalFees,
-            miner: block.miner
-          });
-          await blockDoc.save();
-          logger.debug(`Saved block hash ${hash} to database`);
-        } catch (saveError) {
-          if (saveError.code === 11000) {
-            logger.debug(`Block hash ${hash} already exists (concurrent write), skipping`);
-          } else {
-            logger.warn(`Failed to save block hash ${hash} to database: ${saveError.message}`);
+        logger.debug(`Block hash ${hash} found in database`);
+      } else {
+        logger.debug(`Block hash ${hash} not found in database, fetching from RPC`);
+        block = await serviceManager.getBlockByHash(hash);
+        if (block) {
+          logger.debug(`Block hash ${hash} fetched from RPC`);
+          
+          try {
+            const blockDoc = new Block({
+              hash: block.hash,
+              height: block.height,
+              confirmations: block.confirmations,
+              size: block.size,
+              version: block.version,
+              versionHex: block.versionHex,
+              merkleroot: block.merkleroot,
+              num_tx: block.num_tx,
+              time: block.time,
+              mediantime: block.mediantime,
+              nonce: block.nonce,
+              bits: block.bits,
+              difficulty: block.difficulty,
+              chainwork: block.chainwork,
+              previousblockhash: block.previousblockhash,
+              nextblockhash: block.nextblockhash,
+              tx: block.tx,
+              coinbaseTx: block.coinbaseTx,
+              totalFees: block.totalFees,
+              miner: block.miner
+            });
+            await blockDoc.save();
+            logger.debug(`Saved block hash ${hash} to database`);
+          } catch (saveError) {
+            if (saveError.code === 11000) {
+              logger.debug(`Block hash ${hash} already exists (concurrent write), skipping`);
+            } else {
+              logger.warn(`Failed to save block hash ${hash} to database: ${saveError.message}`);
+            }
           }
         }
       }
@@ -198,16 +236,43 @@ router.post("/heights", async (req, res, next) => {
       ip: req.ip,
     });
 
-    const dbBlocks = await Block.find({ height: { $in: heights } }).lean();
-    const dbBlockHeights = new Set(dbBlocks.map(block => block.height));
-    const missingHeights = heights.filter(height => !dbBlockHeights.has(height));
+    const redisBlockMap = new Map();
+    try {
+      const redisPromises = heights.map(height => 
+        redisService.getJSON(`blocks:recent:${height}`).catch(err => {
+          logger.debug(`Redis lookup failed for block height ${height}:`, err.message);
+          return null;
+        })
+      );
+      const redisResults = await Promise.all(redisPromises);
+      
+      redisResults.forEach((cachedBlock, index) => {
+        if (cachedBlock) {
+          redisBlockMap.set(heights[index], cachedBlock);
+        }
+      });
+      
+      logger.debug(`Found ${redisBlockMap.size} blocks in Redis cache`);
+    } catch (error) {
+      logger.warn('Redis batch lookup failed', { error: error.message });
+    }
 
+    const redisNotFoundHeights = heights.filter(height => !redisBlockMap.has(height));
+    let dbBlockMap = new Map();
+    
+    if (redisNotFoundHeights.length > 0) {
+      const dbBlocks = await Block.find({ height: { $in: redisNotFoundHeights } }).lean();
+      dbBlockMap = new Map(dbBlocks.map(block => [block.height, block]));
+      logger.debug(`Found ${dbBlocks.length} blocks in database`);
+    }
+
+    const dbNotFoundHeights = redisNotFoundHeights.filter(height => !dbBlockMap.has(height));
     let rpcBlocks = [];
     let savedCount = 0;
 
-    if (missingHeights.length > 0) {
-      logger.debug(`Fetching ${missingHeights.length} blocks from RPC: ${missingHeights.join(', ')}`);
-      rpcBlocks = await serviceManager.getBlocksByHeight(missingHeights);
+    if (dbNotFoundHeights.length > 0) {
+      logger.debug(`Fetching ${dbNotFoundHeights.length} blocks from RPC: ${dbNotFoundHeights.join(', ')}`);
+      rpcBlocks = await serviceManager.getBlocksByHeight(dbNotFoundHeights);
       const blockDocs = [];
       for (const block of rpcBlocks) {
         if (block) {
@@ -272,9 +337,23 @@ router.post("/heights", async (req, res, next) => {
       }
     }
 
-    const allBlocks = [...dbBlocks, ...rpcBlocks.filter(b => b !== null)];
-    const blockMap = new Map(allBlocks.map(block => [block.height, block]));
-    const orderedBlocks = heights.map(height => blockMap.get(height)).filter(block => block !== undefined);
+    const rpcBlockMap = new Map();
+    rpcBlocks.forEach((block, index) => {
+      if (block) {
+        rpcBlockMap.set(dbNotFoundHeights[index], block);
+      }
+    });
+
+    const orderedBlocks = heights.map(height => {
+      return redisBlockMap.get(height) || dbBlockMap.get(height) || rpcBlockMap.get(height);
+    }).filter(block => block !== undefined);
+
+    logger.info("Batch block lookup completed", {
+      total: heights.length,
+      redisHits: redisBlockMap.size,
+      dbHits: dbBlockMap.size,
+      rpcHits: rpcBlockMap.size
+    });
 
     res.status(200).json({
       blocks: orderedBlocks.map(block => formatBlockResponse(block)),
@@ -300,16 +379,43 @@ router.get("/latest", async (req, res, next) => {
 
     logger.debug(`Getting latest blocks from height ${startHeight} to ${currentHeight}`);
 
-    const dbBlocks = await Block.find({ height: { $in: heights } }).lean();
-    const dbBlockHeights = new Set(dbBlocks.map(block => block.height));
-    const missingHeights = heights.filter(height => !dbBlockHeights.has(height));
+    const redisBlockMap = new Map();
+    try {
+      const redisPromises = heights.map(height => 
+        redisService.getJSON(`blocks:recent:${height}`).catch(err => {
+          logger.debug(`Redis lookup failed for block height ${height}:`, err.message);
+          return null;
+        })
+      );
+      const redisResults = await Promise.all(redisPromises);
+      
+      redisResults.forEach((cachedBlock, index) => {
+        if (cachedBlock) {
+          redisBlockMap.set(heights[index], cachedBlock);
+        }
+      });
+      
+      logger.debug(`Found ${redisBlockMap.size} latest blocks in Redis cache`);
+    } catch (error) {
+      logger.warn('Redis batch lookup failed for latest blocks', { error: error.message });
+    }
 
+    const redisNotFoundHeights = heights.filter(height => !redisBlockMap.has(height));
+    let dbBlockMap = new Map();
+    
+    if (redisNotFoundHeights.length > 0) {
+      const dbBlocks = await Block.find({ height: { $in: redisNotFoundHeights } }).lean();
+      dbBlockMap = new Map(dbBlocks.map(block => [block.height, block]));
+      logger.debug(`Found ${dbBlocks.length} latest blocks in database`);
+    }
+
+    const dbNotFoundHeights = redisNotFoundHeights.filter(height => !dbBlockMap.has(height));
     let rpcBlocks = [];
     let savedCount = 0;
 
-    if (missingHeights.length > 0) {
-      logger.debug(`Fetching ${missingHeights.length} missing blocks from RPC: ${missingHeights.join(', ')}`);
-      rpcBlocks = await serviceManager.getBlocksByHeight(missingHeights);
+    if (dbNotFoundHeights.length > 0) {
+      logger.debug(`Fetching ${dbNotFoundHeights.length} missing blocks from RPC: ${dbNotFoundHeights.join(', ')}`);
+      rpcBlocks = await serviceManager.getBlocksByHeight(dbNotFoundHeights);
 
       const blockDocs = [];
       for (const block of rpcBlocks) {
@@ -375,9 +481,23 @@ router.get("/latest", async (req, res, next) => {
       }
     }
 
-    const allBlocks = [...dbBlocks, ...rpcBlocks.filter(b => b !== null)];
-    const blockMap = new Map(allBlocks.map(block => [block.height, block]));
-    const orderedBlocks = heights.map(height => blockMap.get(height)).filter(block => block !== undefined);
+    const rpcBlockMap = new Map();
+    rpcBlocks.forEach((block, index) => {
+      if (block) {
+        rpcBlockMap.set(dbNotFoundHeights[index], block);
+      }
+    });
+
+    const orderedBlocks = heights.map(height => {
+      return redisBlockMap.get(height) || dbBlockMap.get(height) || rpcBlockMap.get(height);
+    }).filter(block => block !== undefined);
+
+    logger.info("Latest blocks lookup completed", {
+      total: heights.length,
+      redisHits: redisBlockMap.size,
+      dbHits: dbBlockMap.size,
+      rpcHits: rpcBlockMap.size
+    });
 
     res.status(200).json({
       blocks: orderedBlocks.map(block => formatBlockResponse(block)),

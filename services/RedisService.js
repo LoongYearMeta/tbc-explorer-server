@@ -63,33 +63,6 @@ class RedisService {
         }
     }
 
-    async expire(key, ttl) {
-        try {
-            return await this.redis.expire(key, ttl);
-        } catch (error) {
-            logger.error('Redis EXPIRE operation failed', {
-                key,
-                ttl,
-                error: error.message,
-                stack: error.stack
-            });
-            throw error;
-        }
-    }
-
-    async ttl(key) {
-        try {
-            return await this.redis.ttl(key);
-        } catch (error) {
-            logger.error('Redis TTL operation failed', {
-                key,
-                error: error.message,
-                stack: error.stack
-            });
-            throw error;
-        }
-    }
-
     async setJSON(key, obj, ttl = null) {
         try {
             const value = JSON.stringify(obj);
@@ -110,47 +83,6 @@ class RedisService {
             return value ? JSON.parse(value) : null;
         } catch (error) {
             logger.error('Redis getJSON operation failed', {
-                key,
-                error: error.message,
-                stack: error.stack
-            });
-            throw error;
-        }
-    }
-
-    async hset(key, field, value) {
-        try {
-            return await this.redis.hset(key, field, value);
-        } catch (error) {
-            logger.error('Redis HSET operation failed', {
-                key,
-                field,
-                error: error.message,
-                stack: error.stack
-            });
-            throw error;
-        }
-    }
-
-    async hget(key, field) {
-        try {
-            return await this.redis.hget(key, field);
-        } catch (error) {
-            logger.error('Redis HGET operation failed', {
-                key,
-                field,
-                error: error.message,
-                stack: error.stack
-            });
-            throw error;
-        }
-    }
-
-    async hgetall(key) {
-        try {
-            return await this.redis.hgetall(key);
-        } catch (error) {
-            logger.error('Redis HGETALL operation failed', {
                 key,
                 error: error.message,
                 stack: error.stack
@@ -239,42 +171,6 @@ class RedisService {
         }
     }
 
-    async incr(key, increment = 1) {
-        try {
-            if (increment === 1) {
-                return await this.redis.incr(key);
-            } else {
-                return await this.redis.incrby(key, increment);
-            }
-        } catch (error) {
-            logger.error('Redis INCR operation failed', {
-                key,
-                increment,
-                error: error.message,
-                stack: error.stack
-            });
-            throw error;
-        }
-    }
-
-    async decr(key, decrement = 1) {
-        try {
-            if (decrement === 1) {
-                return await this.redis.decr(key);
-            } else {
-                return await this.redis.decrby(key, decrement);
-            }
-        } catch (error) {
-            logger.error('Redis DECR operation failed', {
-                key,
-                decrement,
-                error: error.message,
-                stack: error.stack
-            });
-            throw error;
-        }
-    }
-
     getStatus() {
         return this.redis.status;
     }
@@ -291,6 +187,37 @@ class RedisService {
             });
             throw error;
         }
+    }
+
+    async keys(pattern) {
+        try {
+            return await this.redis.keys(pattern);
+        } catch (error) {
+            logger.error('Redis KEYS operation failed', {
+                pattern,
+                error: error.message,
+                stack: error.stack
+            });
+            throw error;
+        }
+    }
+
+    async delMultiple(keys) {
+        try {
+            if (!keys || keys.length === 0) return 0;
+            return await this.redis.del(...keys);
+        } catch (error) {
+            logger.error('Redis DEL multiple operation failed', {
+                keys,
+                error: error.message,
+                stack: error.stack
+            });
+            throw error;
+        }
+    }
+
+    getKeyPrefix() {
+        return this.redis.options.keyPrefix || '';
     }
 }
 

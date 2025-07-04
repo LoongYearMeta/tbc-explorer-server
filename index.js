@@ -37,7 +37,7 @@ app.get("/health", (req, res) => {
     2: 'connecting',
     3: 'disconnecting'
   };
-  
+
   const dbState = mongoose.connection.readyState;
   const dbStatus = {
     state: dbConnectionStates[dbState] || 'unknown',
@@ -55,6 +55,21 @@ app.get("/health", (req, res) => {
     keyPrefix: redis.options.keyPrefix
   };
 
+  const workersStatus = {
+    blockPreprocessorWorker: {
+      running: !!process.blockWorkerProcess,
+      pid: process.blockWorkerProcess ? process.blockWorkerProcess.pid : null
+    },
+    redisCacheWorker: {
+      running: !!process.cacheWorkerProcess,
+      pid: process.cacheWorkerProcess ? process.cacheWorkerProcess.pid : null
+    },
+    zeromqWorker: {
+      running: !!process.zeromqWorkerProcess,
+      pid: process.zeromqWorkerProcess ? process.zeromqWorkerProcess.pid : null
+    }
+  };
+
   const overallHealthy = serviceStatus.initialized && dbStatus.connected && redisStatus.connected;
 
   logger.info("Health check request", {
@@ -62,6 +77,7 @@ app.get("/health", (req, res) => {
     serviceStatus: serviceStatus.initialized,
     dbStatus: dbStatus.connected,
     redisStatus: redisStatus.connected,
+    workersStatus,
     overallHealthy
   });
 
@@ -72,6 +88,7 @@ app.get("/health", (req, res) => {
     services: serviceStatus,
     database: dbStatus,
     redis: redisStatus,
+    workers: workersStatus,
   });
 });
 
@@ -108,14 +125,76 @@ app.use((error, req, res, next) => {
 
 const PORT = process.env.PORT || 3000;
 
+let zeromqWorkerStarting = false;
+function startZeroMQWorker() {
+  if (zeromqWorkerStarting) {
+    logger.warn("ZeroMQ worker is already starting, skipping duplicate start request");
+    return;
+  }
+  if (process.zeromqWorkerProcess) {
+    try {
+      process.kill(process.zeromqWorkerProcess.pid, 0);
+      logger.warn("ZeroMQ worker process already exists and running, skipping start");
+      return;
+    } catch (error) {
+      logger.warn(`ZeroMQ worker process reference exists but process ${process.zeromqWorkerProcess.pid} is dead, cleaning up and restarting`);
+      process.zeromqWorkerProcess = null;
+    }
+  }
+  zeromqWorkerStarting = true;
+  logger.info("Starting ZeroMQ worker process...");
+
+  const zeromqWorkerPath = path.join(__dirname, 'workers', 'zeromqWorker.js');
+  const zeromqWorkerProcess = spawn('node', [zeromqWorkerPath], {
+    stdio: 'inherit',
+    env: process.env
+  });
+  process.zeromqWorkerProcess = zeromqWorkerProcess;
+
+  zeromqWorkerProcess.on('error', (error) => {
+    logger.error("ZeroMQ worker process error", {
+      error: error.message,
+      stack: error.stack
+    });
+    if (process.zeromqWorkerProcess === zeromqWorkerProcess) {
+      process.zeromqWorkerProcess = null;
+    }
+    zeromqWorkerStarting = false;
+  });
+
+  zeromqWorkerProcess.on('exit', (code, signal) => {
+    logger.warn("ZeroMQ worker process exited", {
+      code,
+      signal
+    });
+    if (process.zeromqWorkerProcess === zeromqWorkerProcess) {
+      process.zeromqWorkerProcess = null;
+    }
+    zeromqWorkerStarting = false;
+    if (code !== 0 && signal !== 'SIGTERM' && signal !== 'SIGINT' && !process.shuttingDown) {
+      logger.info("ZeroMQ worker process will be restarted in 5 seconds...");
+      setTimeout(() => {
+        if (!process.shuttingDown && !process.zeromqWorkerProcess) {
+          startZeroMQWorker();
+        }
+      }, 5000);
+    }
+  });
+
+  logger.info("ZeroMQ worker process started successfully", {
+    pid: zeromqWorkerProcess.pid
+  });
+  zeromqWorkerStarting = false;
+}
+
 async function startServer() {
   try {
     logger.info("Starting database connection...");
     await connectDB();
-    
+
     logger.info("Starting Redis connection...");
     await connectRedis();
-    
+
     logger.info("Starting external service connections initialization...");
     await serviceManager.initialize();
 
@@ -139,42 +218,16 @@ async function startServer() {
       logger.info("  GET  /mempool                         - Get raw mempool");
       logger.info("  GET  /mempool/info                    - Get mempool info");
 
-      logger.info("ZeroMQ subscriptions:");
-      logger.info("  tcp://0.0.0.0:28332                   - Block hash notifications");
-      logger.info("  tcp://0.0.0.0:28333                   - Transaction hash notifications");
+      logger.info("Worker processes:");
+      logger.info("  Block preprocessor worker             - Process historical blocks");
+      logger.info("  Redis cache worker                    - Cache recent blocks and mempool (one-time)");
+      logger.info("  ZeroMQ worker                         - Real-time block and transaction notifications");
+      setTimeout(() => {
+        logger.info("Starting worker processes...");
+        startWorkerProcesses();
+      }, 100);
     });
 
-    logger.info("Starting block preprocessor worker process...");
-    const workerPath = path.join(__dirname, 'workers', 'blockPreprocessorWorker.js');
-    const workerProcess = spawn('node', [workerPath], {
-      stdio: 'inherit',
-      env: process.env
-    });
-
-    workerProcess.on('error', (error) => {
-      logger.error("Block preprocessor worker process error", {
-        error: error.message,
-        stack: error.stack
-      });
-    });
-
-    workerProcess.on('exit', (code, signal) => {
-      if (code === 0) {
-        logger.info("Block preprocessor worker process completed successfully", {
-          code,
-          signal
-        });
-      } else {
-        logger.error("Block preprocessor worker process exited with error", {
-          code,
-          signal
-        });
-      }
-      process.workerProcess = null;
-    });
-
-    process.workerProcess = workerProcess;
-    
   } catch (error) {
     logger.error("Application startup failed (database, Redis, or external services)", {
       error: error.message,
@@ -184,26 +237,95 @@ async function startServer() {
   }
 }
 
+function startWorkerProcesses() {
+  logger.info("Starting block preprocessor worker process...");
+  const blockWorkerPath = path.join(__dirname, 'workers', 'blockPreprocessorWorker.js');
+  const blockWorkerProcess = spawn('node', [blockWorkerPath], {
+    stdio: 'inherit',
+    env: process.env
+  });
+
+  blockWorkerProcess.on('error', (error) => {
+    logger.error("Block preprocessor worker process error", {
+      error: error.message,
+      stack: error.stack
+    });
+  });
+
+  blockWorkerProcess.on('exit', (code, signal) => {
+    if (code === 0) {
+      logger.info("Block preprocessor worker process completed successfully", {
+        code,
+        signal
+      });
+    } else {
+      logger.error("Block preprocessor worker process exited with error", {
+        code,
+        signal
+      });
+    }
+    process.blockWorkerProcess = null;
+  });
+
+  process.blockWorkerProcess = blockWorkerProcess;
+
+  logger.info("Starting Redis cache worker process (one-time execution)...");
+  const cacheWorkerPath = path.join(__dirname, 'workers', 'redisCacheWorker.js');
+  const cacheWorkerProcess = spawn('node', [cacheWorkerPath], {
+    stdio: 'inherit',
+    env: process.env
+  });
+
+  cacheWorkerProcess.on('error', (error) => {
+    logger.error("Redis cache worker process error", {
+      error: error.message,
+      stack: error.stack
+    });
+  });
+
+  cacheWorkerProcess.on('exit', (code, signal) => {
+    if (code === 0) {
+      logger.info("Redis cache worker process completed successfully", {
+        code,
+        signal
+      });
+    } else {
+      logger.error("Redis cache worker process exited with error", {
+        code,
+        signal
+      });
+    }
+    process.cacheWorkerProcess = null;
+  });
+
+  process.cacheWorkerProcess = cacheWorkerProcess;
+
+  startZeroMQWorker();
+}
+
 startServer();
 
 async function gracefulShutdown(signal) {
   logger.info(`Received ${signal} signal`);
-  
-  if (process.workerProcess) {
-    logger.info('Terminating worker process...');
-    process.workerProcess.kill('SIGTERM');
-    
+
+  process.shuttingDown = true;
+  zeromqWorkerStarting = false;
+
+  if (process.zeromqWorkerProcess) {
+    logger.info('Terminating ZeroMQ worker process...');
+    process.zeromqWorkerProcess.kill('SIGTERM');
+
     await new Promise((resolve) => {
       let timeout = setTimeout(() => {
-        logger.warn('Worker process did not exit gracefully, force killing...');
-        if (process.workerProcess) {
-          process.workerProcess.kill('SIGKILL');
+        logger.warn('ZeroMQ worker process did not exit gracefully, force killing...');
+        if (process.zeromqWorkerProcess) {
+          process.zeromqWorkerProcess.kill('SIGKILL');
         }
         resolve();
       }, 10000);
-      
-      if (process.workerProcess) {
-        process.workerProcess.on('exit', () => {
+
+      if (process.zeromqWorkerProcess) {
+        process.zeromqWorkerProcess.on('exit', () => {
           clearTimeout(timeout);
           resolve();
         });
@@ -213,16 +335,66 @@ async function gracefulShutdown(signal) {
       }
     });
   }
-  
+
+  if (process.blockWorkerProcess) {
+    logger.info('Terminating block preprocessor worker process...');
+    process.blockWorkerProcess.kill('SIGTERM');
+
+    await new Promise((resolve) => {
+      let timeout = setTimeout(() => {
+        logger.warn('Block preprocessor worker process did not exit gracefully, force killing...');
+        if (process.blockWorkerProcess) {
+          process.blockWorkerProcess.kill('SIGKILL');
+        }
+        resolve();
+      }, 10000);
+
+      if (process.blockWorkerProcess) {
+        process.blockWorkerProcess.on('exit', () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+      } else {
+        clearTimeout(timeout);
+        resolve();
+      }
+    });
+  }
+
+  if (process.cacheWorkerProcess) {
+    logger.info('Terminating Redis cache worker process...');
+    process.cacheWorkerProcess.kill('SIGTERM');
+
+    await new Promise((resolve) => {
+      let timeout = setTimeout(() => {
+        logger.warn('Redis cache worker process did not exit gracefully, force killing...');
+        if (process.cacheWorkerProcess) {
+          process.cacheWorkerProcess.kill('SIGKILL');
+        }
+        resolve();
+      }, 5000);
+
+      if (process.cacheWorkerProcess) {
+        process.cacheWorkerProcess.on('exit', () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+      } else {
+        clearTimeout(timeout);
+        resolve();
+      }
+    });
+  }
+
   logger.info('Disconnecting Redis...');
   await disconnectRedis();
-  
+
   logger.info('Shutting down ServiceManager...');
   await serviceManager.shutdown();
-  
+
   logger.info('Disconnecting MongoDB...');
   await disconnectDB();
-  
+
   logger.info('Main process shutting down...');
   process.exit(0);
 }

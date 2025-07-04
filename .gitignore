@@ -4,3 +4,4 @@ logs
 docs
 examples
 .DS_Store
+config/blockProgress.json

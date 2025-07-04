@@ -11,13 +11,11 @@ import {
   getBlockTotalFeesFromCoinbaseTxAndBlockHeight,
   getMinerFromCoinbaseTx,
 } from "../lib/util.js";
-import ZeroMQService from "./zeromq.js";
 
 class ServiceManager {
   constructor() {
     this.rpcClients = {};
     this.initialized = false;
-    this.zmqService = new ZeroMQService(servicesConfig.zeromq);
 
     this.performanceConfig = {
       defaultBatchSize: parseInt(process.env.BATCH_SIZE) || 100,
@@ -49,8 +47,6 @@ class ServiceManager {
     try {
       logger.info("Initializing external service connections...");
       await this.initializeRpcClients();
-      this.zmqService.setServiceManager(this);
-      await this.zmqService.start();
       this.initialized = true;
       logger.info("All external service connections initialized successfully");
     } catch (error) {
@@ -77,7 +73,7 @@ class ServiceManager {
               port: service.port,
               timeout: service.timeout
             };
-            
+
             logger.info(`Configuring TCP JSON-RPC client`, {
               url: service.url,
               protocol: service.protocol,
@@ -177,11 +173,11 @@ class ServiceManager {
 
   calculateOptimalBatchSize(totalRequests) {
     const { defaultBatchSize, maxBatchSize, minBatchSize } = this.performanceConfig;
-    
+
     if (totalRequests <= defaultBatchSize) {
       return totalRequests;
     }
-    
+
     if (totalRequests > 1000) {
       return Math.max(minBatchSize, Math.min(defaultBatchSize * 0.75, maxBatchSize));
     }
@@ -189,11 +185,11 @@ class ServiceManager {
     if (totalRequests > 100 && totalRequests <= 500) {
       return Math.max(minBatchSize, Math.min(maxBatchSize, totalRequests));
     }
-    
+
     if (totalRequests > 500) {
       return Math.max(minBatchSize, Math.min(defaultBatchSize, maxBatchSize));
     }
-    
+
     return Math.max(minBatchSize, Math.min(defaultBatchSize * 1.2, maxBatchSize));
   }
 
@@ -224,26 +220,26 @@ class ServiceManager {
   async callTcpRpc(host, port, method, params, timeout = 10000) {
     return new Promise((resolve, reject) => {
       const client = new net.Socket();
-      
+
       const payload = {
         jsonrpc: "2.0",
         method: method,
         params: params,
         id: generateRandomString(16),
       };
-      
+
       const message = JSON.stringify(payload) + '\n';
       let responseData = '';
-      
+
       client.setTimeout(timeout);
-      
+
       client.on('data', (data) => {
         responseData += data.toString();
         if (responseData.includes('\n')) {
           try {
             const response = JSON.parse(responseData.trim());
             client.destroy();
-            
+
             if (response.error) {
               reject(new Error(`RPC Error: ${response.error.message} (Code: ${response.error.code})`));
             } else {
@@ -255,17 +251,17 @@ class ServiceManager {
           }
         }
       });
-      
+
       client.on('error', (error) => {
         client.destroy();
         reject(error);
       });
-      
+
       client.on('timeout', () => {
         client.destroy();
         reject(new Error('TCP connection timeout'));
       });
-      
+
       client.connect(port, host, () => {
         client.write(message);
       });
@@ -802,7 +798,7 @@ class ServiceManager {
 
       return results;
     } catch (error) {
-      logger.error("Error in getRawTransactionsHex", { 
+      logger.error("Error in getRawTransactionsHex", {
         error: error.message,
         txids: txids.length > 10 ? `${txids.slice(0, 10).join(', ')}... (${txids.length} total)` : txids.join(', ')
       });
@@ -906,7 +902,7 @@ class ServiceManager {
       const result = await this.callRpcMethod("electrumx-rpc", "blockchain.scripthash.get_balance", [scriptHash]);
       return {
         ...result,
-        address 
+        address
       };
     } catch (error) {
       logger.error("Error getting address balance", {
@@ -951,7 +947,6 @@ class ServiceManager {
         name,
         url: this.rpcClients[name].config.url,
       })),
-      zeromq: this.zmqService.getStatus(),
       batchRetryConfig: this.batchRetryConfig,
       performanceConfig: this.performanceConfig,
       circuitBreaker: {
@@ -961,20 +956,13 @@ class ServiceManager {
     };
   }
 
-  getZeroMQService() {
-    return this.zmqService;
-  }
-
   async shutdown() {
     logger.info('ServiceManager: Starting shutdown process...');
-    
+
     try {
-      if (this.zmqService) {
-        await this.zmqService.stop();
-      }
       this.rpcClients = {};
       this.initialized = false;
-      
+
       logger.info('ServiceManager: Shutdown completed successfully');
     } catch (error) {
       logger.error('ServiceManager: Error during shutdown', {

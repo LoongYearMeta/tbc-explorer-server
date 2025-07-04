@@ -3,6 +3,7 @@ import zmq from "zeromq";
 import logger from "../config/logger.js";
 import { Block } from "../models/block.js";
 import { Transaction } from "../models/transaction.js";
+import redisService from "./RedisService.js";
 
 class ZeroMQService {
   constructor(config) {
@@ -15,7 +16,7 @@ class ZeroMQService {
       hashblock: { received: 0, errors: 0, lastReceived: null },
       hashtx: { received: 0, errors: 0, lastReceived: null }
     };
-    this.serviceManager = null; 
+    this.serviceManager = null;
     this.setupDefaultHandlers();
   }
 
@@ -59,6 +60,8 @@ class ZeroMQService {
     this.isRunning = true;
     logger.info('[ZMQ] Starting ZeroMQ service...');
 
+    await this.clearRedisCache();
+
     const subscriptionPromises = [];
     for (const [subscriptionName, subscription] of Object.entries(this.config.subscriptions)) {
       if (subscription.enabled) {
@@ -73,7 +76,7 @@ class ZeroMQService {
 
     logger.info('[ZMQ] ZeroMQ service started');
     logger.info(`[ZMQ] Subscriptions: ${connectedCount}/${totalCount} connected`);
-    
+
     if (connectedCount === 0) {
       logger.warn('[ZMQ] No ZeroMQ subscriptions connected - will attempt to reconnect');
     }
@@ -81,17 +84,17 @@ class ZeroMQService {
 
   async createSubscription(name, subscription) {
     const address = `tcp://${this.config.host}:${subscription.port}`;
-    
+
     try {
       const subscriber = new zmq.Subscriber();
       subscriber.subscribe(subscription.topic);
       subscriber.connect(address);
-      
+
       this.subscribers.set(name, {
         subscriber,
         subscription,
         address,
-        connected: false, 
+        connected: false,
         lastError: null
       });
 
@@ -103,7 +106,7 @@ class ZeroMQService {
         error: error.message,
         address
       });
-      
+
       this.subscribers.set(name, {
         subscriber: null,
         subscription,
@@ -117,7 +120,7 @@ class ZeroMQService {
 
   setupMessageHandler(subscriber, name, topic) {
     const messageHandler = this.messageHandlers.get(name);
-    
+
     if (!messageHandler) {
       logger.warn(`[ZMQ] No message handler found for ${name}`);
       return;
@@ -138,7 +141,7 @@ class ZeroMQService {
               subscription.connected = true;
               subscription.lastError = null;
             }
-            
+
             messageHandler(receivedTopic, message);
           }
         }
@@ -152,7 +155,7 @@ class ZeroMQService {
           subscription.connected = false;
           subscription.lastError = error;
         }
-        
+
         this.handleSubscriptionError(name, error);
       } finally {
         logger.warn(`[ZMQ] Message handler loop ended for ${name}`);
@@ -198,7 +201,7 @@ class ZeroMQService {
       }
 
       logger.info(`[ZMQ] Attempting to reconnect ${name}...`);
-      
+
       if (subscriptionData.subscriber) {
         try {
           await subscriptionData.subscriber.close();
@@ -206,9 +209,9 @@ class ZeroMQService {
           logger.debug(`[ZMQ] Error closing existing connection for ${name}:`, closeError.message);
         }
       }
-      
+
       await this.createSubscription(name, subscriptionData.subscription);
-      
+
     } catch (error) {
       logger.error(`[ZMQ] Failed to reconnect ${name}`, {
         error: error.message
@@ -219,7 +222,7 @@ class ZeroMQService {
 
   getStatus() {
     const subscriptions = {};
-    
+
     for (const [name, subscriptionData] of this.subscribers.entries()) {
       subscriptions[name] = {
         connected: subscriptionData.connected,
@@ -240,26 +243,26 @@ class ZeroMQService {
   async onNewBlockHash(blockHash) {
     try {
       logger.info(`[ZMQ] Processing new block hash: ${blockHash}`);
-      
+
       const existingBlock = await Block.findOne({ hash: blockHash });
       if (existingBlock) {
         logger.debug(`[ZMQ] Block ${blockHash} already exists in database`);
         return;
       }
-      
+
       if (!this.serviceManager) {
         logger.warn(`[ZMQ] ServiceManager not set, cannot fetch block details for ${blockHash}`);
         return;
       }
-      
+
       logger.debug(`[ZMQ] Fetching block details for ${blockHash}`);
       const blockDetails = await this.serviceManager.getBlockByHash(blockHash);
-      
+
       if (!blockDetails) {
         logger.error(`[ZMQ] Failed to fetch block details for ${blockHash}`);
         return;
       }
-      
+
       const blockDoc = new Block({
         hash: blockDetails.hash,
         height: blockDetails.height,
@@ -282,11 +285,12 @@ class ZeroMQService {
         totalFees: blockDetails.totalFees,
         miner: blockDetails.miner
       });
-      
+
       await blockDoc.save();
       logger.info(`[ZMQ] Successfully saved block ${blockHash} (height: ${blockDetails.height}) to database`);
       await this.processBlockTransactions(blockDetails);
-      
+      await this.updateRedisBlockCache(blockDetails);
+      this.scheduleUpdateMempoolCache(blockDetails.tx, blockDetails.height);
     } catch (error) {
       if (error.code === 11000) {
         logger.debug(`[ZMQ] Block ${blockHash} already exists (concurrent write), skipping`);
@@ -302,19 +306,19 @@ class ZeroMQService {
   async processBlockTransactions(blockDetails) {
     try {
       const { height, tx: txIds } = blockDetails;
-      const MAX_BLOCKS = 10000;  
-      const TARGET_BLOCKS = 9000; 
+      const MAX_BLOCKS = 10000;
+      const TARGET_BLOCKS = 9000;
       const currentBlockCount = await Transaction.getDistinctBlockCount();
-      
+
       if (currentBlockCount >= MAX_BLOCKS) {
-        const sortedHeights = await Transaction.getDistinctBlockHeights(-1); 
+        const sortedHeights = await Transaction.getDistinctBlockHeights(-1);
         const blocksToKeep = sortedHeights.slice(0, TARGET_BLOCKS);
         const minHeightToKeep = Math.min(...blocksToKeep);
-        
+
         logger.info(`[ZMQ] Block count (${currentBlockCount}) reached ${MAX_BLOCKS}, cleaning up transactions below height ${minHeightToKeep}`);
-        
+
         const deleteResult = await Transaction.deleteBeforeHeight(minHeightToKeep);
-        
+
         logger.info(`[ZMQ] Cleaned up ${deleteResult.deletedCount} transactions from old blocks, maintaining ${TARGET_BLOCKS} newest blocks`);
       }
       logger.info(`[ZMQ] Processing ${txIds.length} transactions from block ${height}`);
@@ -340,12 +344,12 @@ class ZeroMQService {
         const batch = batches[i];
         try {
           const rawTxs = await this.serviceManager.getRawTransactionsHex(batch);
-          
+
           const txDocs = [];
           for (let j = 0; j < batch.length; j++) {
             const txid = batch[j];
             const rawTx = rawTxs[j];
-            
+
             if (rawTx) {
               txDocs.push({
                 txid: txid,
@@ -360,9 +364,9 @@ class ZeroMQService {
 
           if (txDocs.length > 0) {
             try {
-              const result = await Transaction.insertMany(txDocs, { 
+              const result = await Transaction.insertMany(txDocs, {
                 ordered: false,
-                rawResult: true 
+                rawResult: true
               });
               const savedCount = result.insertedCount || txDocs.length;
               totalSaved += savedCount;
@@ -406,16 +410,33 @@ class ZeroMQService {
   async onNewTransactionHash(txHash) {
     try {
       logger.info(`[ZMQ] Processing new transaction hash: ${txHash}`);
-      
-      // TODO: 实现交易哈希处理逻辑
-      // 可以在这里添加：
-      // 1. 检查交易是否已存在
-      // 2. 获取交易详情
-      // 3. 保存到数据库
-      // 4. 触发相关业务逻辑
-      
-      logger.debug(`[ZMQ] Transaction hash processing not implemented yet: ${txHash}`);
-      
+      const cacheKey = `mempool:tx:${txHash}`;
+      const existingTx = await redisService.exists(cacheKey);
+
+      if (existingTx) {
+        logger.debug(`[ZMQ] Transaction ${txHash} already exists in Redis cache`);
+        return;
+      }
+
+      if (!this.serviceManager) {
+        logger.warn(`[ZMQ] ServiceManager not set, cannot fetch transaction details for ${txHash}`);
+        return;
+      }
+
+      const rawTx = await this.serviceManager.getRawTransactionHex(txHash);
+      if (!rawTx) {
+        logger.warn(`[ZMQ] Failed to get raw transaction for ${txHash}`);
+        return;
+      }
+
+      const txData = {
+        txid: txHash,
+        raw: rawTx
+      };
+
+      await redisService.setJSON(cacheKey, txData);
+      logger.debug(`[ZMQ] Cached new transaction ${txHash} to Redis`);
+
     } catch (error) {
       logger.error(`[ZMQ] Error processing new transaction hash ${txHash}`, {
         error: error.message,
@@ -454,13 +475,201 @@ class ZeroMQService {
         subscriptionData.connected = false;
       }
     }
-    
+
     if (closePromises.length > 0) {
       await Promise.allSettled(closePromises);
     }
-    
+
     this.subscribers.clear();
     logger.info('[ZMQ] ZeroMQ service stopped successfully');
+  }
+
+  async updateRedisBlockCache(blockDetails) {
+    try {
+      logger.debug(`[ZMQ] Updating Redis block cache for block ${blockDetails.height}`);
+
+      const maxRecentBlocks = 10;
+      const cacheKey = `blocks:recent:${blockDetails.height}`;
+      await redisService.setJSON(cacheKey, blockDetails);
+      await redisService.rpush('blocks:recent:queue', blockDetails.height);
+      const queueLength = await redisService.llen('blocks:recent:queue');
+      if (queueLength > maxRecentBlocks) {
+        const oldHeight = await redisService.lpop('blocks:recent:queue');
+        if (oldHeight) {
+          const oldCacheKey = `blocks:recent:${oldHeight}`;
+          await redisService.del(oldCacheKey);
+          logger.debug(`[ZMQ] Removed old block ${oldHeight} from queue and cache`);
+        }
+      }
+
+      logger.debug(`[ZMQ] Successfully updated Redis block cache for block ${blockDetails.height}`);
+
+    } catch (error) {
+      logger.error(`[ZMQ] Error updating Redis block cache`, {
+        error: error.message,
+        stack: error.stack,
+        blockHeight: blockDetails.height
+      });
+    }
+  }
+
+  async clearRedisCache() {
+    try {
+      logger.info('[ZMQ] Clearing Redis cache on startup...');
+      const mempoolPattern = 'tbc-explorer:mempool:tx:*';
+      const mempoolKeys = await redisService.exec('KEYS', mempoolPattern);
+      if (mempoolKeys && mempoolKeys.length > 0) {
+        await redisService.exec('DEL', ...mempoolKeys);
+        logger.info(`[ZMQ] Cleared ${mempoolKeys.length} mempool transaction cache entries`);
+      }
+      const blockPattern = 'tbc-explorer:blocks:recent:*';
+      const blockKeys = await redisService.exec('KEYS', blockPattern);
+      if (blockKeys && blockKeys.length > 0) {
+        await redisService.exec('DEL', ...blockKeys);
+        logger.info(`[ZMQ] Cleared ${blockKeys.length} recent blocks cache entries`);
+      }
+      
+      const queueExists = await redisService.exists(`blocks:recent:queue`);
+      if (queueExists) {
+        await redisService.del(`blocks:recent:queue`);
+        logger.info(`[ZMQ] Cleared blocks recent queue`);
+      }
+      
+      logger.info('[ZMQ] Redis cache cleared successfully');
+    } catch (error) {
+      logger.error('[ZMQ] Error clearing Redis cache on startup', {
+        error: error.message,
+        stack: error.stack
+      });
+    }
+  }
+
+  async updateRedisMempoolCache(excludeBlockTxIds = []) {
+    try {
+      logger.debug(`[ZMQ] Updating Redis mempool cache`);
+      const currentMempoolTxIds = await this.serviceManager.getRawMempool();
+      const pattern = 'tbc-explorer:mempool:tx:*';
+      const cachedKeys = await redisService.exec('KEYS', pattern);
+      const cachedTxIds = cachedKeys.map(key => {
+        const parts = key.split(':');
+        return parts[parts.length - 1]; 
+      });
+
+      let filteredMempoolTxIds = currentMempoolTxIds;
+      if (excludeBlockTxIds && excludeBlockTxIds.length > 0) {
+        const excludeSet = new Set(excludeBlockTxIds);
+        filteredMempoolTxIds = currentMempoolTxIds.filter(txid => !excludeSet.has(txid));
+        logger.debug(`[ZMQ] Excluded ${excludeBlockTxIds.length} block transactions from mempool cache update`);
+      }
+
+      if (!filteredMempoolTxIds || filteredMempoolTxIds.length === 0) {
+        if (cachedKeys.length > 0) {
+          await redisService.exec('DEL', ...cachedKeys);
+          logger.debug(`[ZMQ] Mempool is empty, cleared ${cachedKeys.length} cached transactions`);
+        }
+        return;
+      }
+
+      const currentTxSet = new Set(filteredMempoolTxIds);
+      const cachedTxSet = new Set(cachedTxIds);
+
+      const toRemove = cachedTxIds.filter(txid => !currentTxSet.has(txid));
+      const toAdd = filteredMempoolTxIds.filter(txid => !cachedTxSet.has(txid));
+      if (toRemove.length > 0) {
+        const keysToRemove = toRemove.map(txid => `tbc-explorer:mempool:tx:${txid}`);
+        await redisService.exec('DEL', ...keysToRemove);
+        logger.debug(`[ZMQ] Removed ${toRemove.length} stale transactions from Redis cache`);
+      }
+      if (toAdd.length > 0) {
+        logger.debug(`[ZMQ] Adding ${toAdd.length} new transactions to Redis cache`);
+
+        const BATCH_SIZE = 100;
+        let cachedCount = 0;
+
+        for (let i = 0; i < toAdd.length; i += BATCH_SIZE) {
+          const batch = toAdd.slice(i, i + BATCH_SIZE);
+
+          try {
+            const rawTxs = await this.serviceManager.getRawTransactionsHex(batch);
+            for (let j = 0; j < batch.length; j++) {
+              const txid = batch[j];
+              const raw = rawTxs[j];
+
+              if (raw) {
+                const cacheKey = `mempool:tx:${txid}`;
+                const txData = {
+                  txid: txid,
+                  raw: raw
+                };
+                await redisService.setJSON(cacheKey, txData);
+                cachedCount++;
+              }
+            }
+
+            logger.debug(`[ZMQ] Cached batch ${Math.floor(i / BATCH_SIZE) + 1} (${batch.length} transactions)`);
+
+          } catch (error) {
+            logger.error(`[ZMQ] Error caching mempool transaction batch`, {
+              error: error.message,
+              batchStart: i,
+              batchSize: batch.length
+            });
+          }
+        }
+
+        logger.debug(`[ZMQ] Added ${cachedCount} new transactions to Redis cache`);
+      }
+
+      logger.debug(`[ZMQ] Successfully updated Redis mempool cache`, {
+        removed: toRemove.length,
+        added: toAdd.length,
+        total: filteredMempoolTxIds.length,
+        excluded: excludeBlockTxIds.length
+      });
+
+    } catch (error) {
+      logger.error(`[ZMQ] Error updating Redis mempool cache`, {
+        error: error.message,
+        stack: error.stack
+      });
+    }
+  }
+
+  scheduleUpdateMempoolCache(blockTxIds, blockHeight, attempt = 1, maxAttempts = 3) {
+    const delay = attempt * 2000;
+
+    setTimeout(async () => {
+      try {
+        logger.debug(`[ZMQ] Attempting mempool cache update for block ${blockHeight}, attempt ${attempt}/${maxAttempts}`);
+        const currentMempoolTxIds = await this.serviceManager.getRawMempool();
+        const blockTxSet = new Set(blockTxIds);
+        const stillInMempool = currentMempoolTxIds.filter(txid => blockTxSet.has(txid));
+        
+        if (stillInMempool.length > 0 && attempt < maxAttempts) {
+          logger.debug(`[ZMQ] ${stillInMempool.length} block transactions still in mempool, will retry in ${(attempt + 1) * 2}s`);
+          this.scheduleUpdateMempoolCache(blockTxIds, blockHeight, attempt + 1, maxAttempts);
+          return;
+        }
+
+        if (stillInMempool.length > 0) {
+          logger.warn(`[ZMQ] ${stillInMempool.length} block transactions still in mempool after ${maxAttempts} attempts, updating cache anyway`);
+        }
+
+        await this.updateRedisMempoolCache(blockTxIds);
+        logger.debug(`[ZMQ] Successfully updated mempool cache for block ${blockHeight} on attempt ${attempt}`);
+        
+      } catch (error) {
+        logger.error(`[ZMQ] Error in mempool cache update attempt ${attempt} for block ${blockHeight}`, {
+          error: error.message,
+          stack: error.stack
+        });
+        
+        if (attempt < maxAttempts) {
+          logger.debug(`[ZMQ] Will retry mempool cache update for block ${blockHeight}`);
+          this.scheduleUpdateMempoolCache(blockTxIds, blockHeight, attempt + 1, maxAttempts);
+        }
+      }
+    }, delay);
   }
 }
 
