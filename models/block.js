@@ -36,8 +36,8 @@ const blockSchema = new mongoose.Schema({
   totalFees: { type: String, required: true },
   miner: { type: String, required: true }
 }, {
-  timestamps: true,
-  collection: 'blocks'
+  collection: 'blocks',
+  versionKey: false,
 });
 
 blockSchema.index({ hash: 1 });

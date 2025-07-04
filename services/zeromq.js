@@ -306,14 +306,14 @@ class ZeroMQService {
       const { height, tx: txIds } = blockDetails;
       
       // First, check if we need to clean up old transactions
-      const MAX_BLOCKS = 1000;  // When reaching this, trigger cleanup
-      const TARGET_BLOCKS = 900; // Keep this many blocks after cleanup
+      const MAX_BLOCKS = 10000;  // When reaching this, trigger cleanup
+      const TARGET_BLOCKS = 9000; // Keep this many blocks after cleanup
       
       // Get the actual count of distinct block heights in the database
       const currentBlockCount = await Transaction.getDistinctBlockCount();
       
       if (currentBlockCount >= MAX_BLOCKS) {
-        // When we reach 1000 blocks, keep only the newest 900 blocks
+        // When we reach 10000 blocks, keep only the newest 9000 blocks
         const sortedHeights = await Transaction.getDistinctBlockHeights(-1); // Sort descending
         const blocksToKeep = sortedHeights.slice(0, TARGET_BLOCKS);
         const minHeightToKeep = Math.min(...blocksToKeep);

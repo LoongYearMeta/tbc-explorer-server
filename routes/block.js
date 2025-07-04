@@ -22,13 +22,10 @@ router.get("/height/:height", async (req, res, next) => {
       ip: req.ip,
     });
 
-
     let block = await Block.findOne({ height }).lean();
-    let source = "database";
     if (!block) {
       logger.debug(`Block height ${height} not found in database, fetching from RPC`);
       block = await serviceManager.getBlockByHeight(height);
-      source = "rpc";
 
       if (block) {
         try {
@@ -69,15 +66,12 @@ router.get("/height/:height", async (req, res, next) => {
     if (!block) {
       return res.status(404).json({
         error: "Block not found",
-        height,
-        timestamp: new Date().toISOString()
+        height
       });
     }
 
     res.status(200).json({
-      block,
-      source,
-      timestamp: new Date().toISOString()
+      block
     });
   } catch (error) {
     next(error);
@@ -94,12 +88,12 @@ router.get("/hash/:hash", async (req, res, next) => {
     });
 
     let block = await Block.findOne({ hash }).lean();
-    let source = "database";
+
 
     if (!block) {
       logger.debug(`Block hash ${hash} not found in database, fetching from RPC`);
       block = await serviceManager.getBlockByHash(hash);
-      source = "rpc";
+
       if (block) {
         try {
           const blockDoc = new Block({
@@ -139,15 +133,12 @@ router.get("/hash/:hash", async (req, res, next) => {
     if (!block) {
       return res.status(404).json({
         error: "Block not found",
-        hash,
-        timestamp: new Date().toISOString()
+        hash
       });
     }
 
     res.status(200).json({
-      block,
-      source,
-      timestamp: new Date().toISOString()
+      block
     });
   } catch (error) {
     next(error);
@@ -160,23 +151,20 @@ router.post("/heights", async (req, res, next) => {
 
     if (!Array.isArray(heights) || heights.length === 0) {
       return res.status(400).json({
-        error: "heights array is required and cannot be empty",
-        timestamp: new Date().toISOString()
+        error: "heights array is required and cannot be empty"
       });
     }
 
     if (heights.length > 100) {
       return res.status(400).json({
-        error: "Maximum 100 block heights allowed per request",
-        timestamp: new Date().toISOString()
+        error: "Maximum 100 block heights allowed per request"
       });
     }
 
     const validHeights = heights.filter(h => Number.isInteger(h) && h >= 0);
     if (validHeights.length !== heights.length) {
       return res.status(400).json({
-        error: "All heights must be non-negative integers",
-        timestamp: new Date().toISOString()
+        error: "All heights must be non-negative integers"
       });
     }
 
@@ -265,12 +253,7 @@ router.post("/heights", async (req, res, next) => {
 
     res.status(200).json({
       blocks: orderedBlocks,
-      total: orderedBlocks.length,
-      sources: {
-        database: dbBlocks.length,
-        rpc: rpcBlocks.filter(b => b !== null).length
-      },
-      timestamp: new Date().toISOString()
+      total: orderedBlocks.length
     });
   } catch (error) {
     next(error);
@@ -374,12 +357,7 @@ router.get("/latest", async (req, res, next) => {
     res.status(200).json({
       blocks: orderedBlocks,
       total: orderedBlocks.length,
-      currentHeight: currentHeight,
-      sources: {
-        database: dbBlocks.length,
-        rpc: rpcBlocks.filter(b => b !== null).length
-      },
-      timestamp: new Date().toISOString()
+      currentHeight: currentHeight
     });
   } catch (error) {
     next(error);

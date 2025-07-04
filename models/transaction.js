@@ -5,8 +5,8 @@ const transactionSchema = new mongoose.Schema({
     raw: { type: String, required: true },
     blockHeight: { type: Number, required: true, index: true },
 },{
-    timestamps: true,
-    collection: 'transactions'
+    collection: 'transactions',
+    versionKey: false,
 });
 
 transactionSchema.index({ txid: 1 });

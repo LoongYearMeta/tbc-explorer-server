@@ -1,4 +1,6 @@
 import dotenv from "dotenv";
+import fs from "fs/promises";
+import path from "path";
 
 import logger from "../config/logger.js";
 import { connectDB, disconnectDB } from "../config/db.js";
@@ -11,18 +13,19 @@ dotenv.config();
 class BlockPreprocessorWorker {
   constructor() {
     this.isRunning = false;
-    this.endHeight = 824190;
+    this.startHeight = null; 
     this.batchSize = 100;
     this.delayBetweenBatches = 5000;
     this.maxRetries = 3;
     this.currentHeight = null;
+    this.configPath = path.join(process.cwd(), 'config', 'blockProgress.json');
     this.stats = {
       totalProcessed: 0,
       totalSaved: 0,
       totalErrors: 0,
       startTime: null,
       currentBatch: 0,
-      initialHeight: null,
+      latestHeight: null,
       txPreprocessing: {
         totalTxProcessed: 0,
         totalTxSaved: 0,
@@ -32,12 +35,50 @@ class BlockPreprocessorWorker {
     };
   }
 
+  async loadConfig() {
+    try {
+      const configData = await fs.readFile(this.configPath, 'utf8');
+      return JSON.parse(configData);
+    } catch (error) {
+      logger.warn("BlockPreprocessorWorker: Failed to load config, using defaults", {
+        error: error.message
+      });
+      return {
+        lastProcessedHeight: 824190,
+        lastUpdated: new Date().toISOString(),
+        totalProcessed: 0,
+        processingDirection: "forward"
+      };
+    }
+  }
+
+  async saveConfig(config) {
+    try {
+      await fs.writeFile(this.configPath, JSON.stringify(config, null, 2));
+      logger.info("BlockPreprocessorWorker: Config saved successfully", {
+        lastProcessedHeight: config.lastProcessedHeight,
+        totalProcessed: config.totalProcessed
+      });
+    } catch (error) {
+      logger.error("BlockPreprocessorWorker: Failed to save config", {
+        error: error.message
+      });
+    }
+  }
+
   async initialize() {
     try {
       logger.info("BlockPreprocessorWorker: Initializing...");
       await connectDB();
       await serviceManager.initialize();
-      logger.info("BlockPreprocessorWorker: Initialization completed");
+      
+      // 加载配置
+      const config = await this.loadConfig();
+      this.startHeight = config.lastProcessedHeight;
+      
+      logger.info("BlockPreprocessorWorker: Initialization completed", {
+        startHeight: this.startHeight
+      });
       await this.start();
     } catch (error) {
       logger.error("BlockPreprocessorWorker: Initialization failed", {
@@ -57,21 +98,22 @@ class BlockPreprocessorWorker {
     try {
       const blockchainInfo = await serviceManager.getBlockchainInfo();
       const latestHeight = blockchainInfo.blocks;
+      this.stats.latestHeight = latestHeight;
 
       const lastBlock = await Block.findOne({}).sort({ height: -1 }).select('height');
       const dbMaxHeight = lastBlock ? lastBlock.height : 0;
 
-      this.currentHeight = latestHeight;
+      this.currentHeight = this.startHeight;
 
-      if (latestHeight < this.endHeight) {
-        logger.info("BlockPreprocessorWorker: Latest blockchain height is lower than end height", {
-          dbMaxHeight,
-          latestHeight,
-          endHeight: this.endHeight,
-          currentHeight: this.currentHeight
+      if (this.currentHeight >= latestHeight) {
+        logger.info("BlockPreprocessorWorker: Already synchronized to latest height", {
+          currentHeight: this.currentHeight,
+          latestHeight: latestHeight,
+          dbMaxHeight
         });
 
-        logger.info("BlockPreprocessorWorker: No work needed, shutting down worker process");
+        logger.info("BlockPreprocessorWorker: No block work needed, proceeding to transaction preprocessing");
+        await this.preprocessTransactions();
         setTimeout(() => {
           process.exit(0);
         }, 2000);
@@ -80,18 +122,16 @@ class BlockPreprocessorWorker {
 
       this.isRunning = true;
       this.stats.startTime = new Date();
-      this.stats.initialHeight = this.currentHeight;
 
-      logger.info("BlockPreprocessorWorker: Starting block preprocessing (reverse direction)", {
+      logger.info("BlockPreprocessorWorker: Starting block preprocessing (forward direction)", {
         startHeight: this.currentHeight,
-        endHeight: this.endHeight,
         latestHeight: latestHeight,
         dbMaxHeight,
-        totalToProcess: this.currentHeight - this.endHeight + 1,
+        totalToProcess: latestHeight - this.currentHeight + 1,
         batchSize: this.batchSize
       });
 
-      await this.processBlocks(this.endHeight);
+      await this.processBlocks(latestHeight);
 
     } catch (error) {
       logger.error("BlockPreprocessorWorker: Failed to start", {
@@ -102,16 +142,16 @@ class BlockPreprocessorWorker {
     }
   }
 
-  async processBlocks(targetEndHeight) {
+  async processBlocks(targetLatestHeight) {
     try {
-      while (this.currentHeight >= targetEndHeight && this.isRunning) {
-        const startHeight = Math.max(this.currentHeight - this.batchSize + 1, targetEndHeight);
+      while (this.currentHeight <= targetLatestHeight && this.isRunning) {
+        const endHeight = Math.min(this.currentHeight + this.batchSize - 1, targetLatestHeight);
         const heights = [];
-        for (let h = this.currentHeight; h >= startHeight; h--) {
+        for (let h = this.currentHeight; h <= endHeight; h++) {
           heights.push(h);
         }
 
-        logger.debug(`BlockPreprocessorWorker: Processing batch ${this.stats.currentBatch + 1}: heights ${this.currentHeight} to ${startHeight}`);
+        logger.debug(`BlockPreprocessorWorker: Processing batch ${this.stats.currentBatch + 1}: heights ${this.currentHeight} to ${endHeight}`);
 
         let retryCount = 0;
         let batchSuccess = false;
@@ -123,13 +163,17 @@ class BlockPreprocessorWorker {
             this.stats.currentBatch++;
             this.stats.totalProcessed += heights.length;
 
+            // 更新配置文件中的进度
+            await this.updateProgress(endHeight);
+
             if (this.stats.currentBatch % 10 === 0) {
-              const totalToProcess = this.stats.initialHeight - targetEndHeight + 1;
+              const totalToProcess = targetLatestHeight - this.startHeight + 1;
               const processed = this.stats.totalProcessed;
               const progress = (processed / totalToProcess) * 100;
               logger.info(`BlockPreprocessorWorker: Progress ${progress.toFixed(1)}%`, {
                 currentHeight: this.currentHeight,
-                targetEndHeight,
+                endHeight: endHeight,
+                targetLatestHeight,
                 batchesProcessed: this.stats.currentBatch,
                 totalSaved: this.stats.totalSaved,
                 totalErrors: this.stats.totalErrors
@@ -156,14 +200,14 @@ class BlockPreprocessorWorker {
           });
         }
 
-        this.currentHeight = startHeight - 1;
-        if (this.currentHeight >= targetEndHeight) {
+        this.currentHeight = endHeight + 1;
+        if (this.currentHeight <= targetLatestHeight) {
           await new Promise(resolve => setTimeout(resolve, this.delayBetweenBatches));
         }
       }
 
       if (this.isRunning) {
-        this.complete();
+        await this.complete();
       }
 
     } catch (error) {
@@ -173,6 +217,21 @@ class BlockPreprocessorWorker {
         currentHeight: this.currentHeight
       });
       this.isRunning = false;
+    }
+  }
+
+  async updateProgress(lastProcessedHeight) {
+    try {
+      const config = await this.loadConfig();
+      config.lastProcessedHeight = lastProcessedHeight;
+      config.lastUpdated = new Date().toISOString();
+      config.totalProcessed = this.stats.totalProcessed;
+      await this.saveConfig(config);
+    } catch (error) {
+      logger.error("BlockPreprocessorWorker: Failed to update progress", {
+        error: error.message,
+        lastProcessedHeight
+      });
     }
   }
 
@@ -266,11 +325,31 @@ class BlockPreprocessorWorker {
 
   async preprocessTransactions() {
     try {
-      logger.info("BlockPreprocessorWorker: Starting transaction preprocessing for latest 100 blocks");
+      logger.info("BlockPreprocessorWorker: Starting transaction preprocessing for latest 1000 blocks");
+
+      // First, check if we need to clean up old transactions (same as ZeroMQ)
+      const MAX_BLOCKS = 10000;  // When reaching this, trigger cleanup
+      const TARGET_BLOCKS = 9000; // Keep this many blocks after cleanup
+      
+      // Get the actual count of distinct block heights in the database
+      const currentBlockCount = await Transaction.getDistinctBlockCount();
+      
+      if (currentBlockCount >= MAX_BLOCKS) {
+        // When we reach 10000 blocks, keep only the newest 9000 blocks
+        const sortedHeights = await Transaction.getDistinctBlockHeights(-1); // Sort descending
+        const blocksToKeep = sortedHeights.slice(0, TARGET_BLOCKS);
+        const minHeightToKeep = Math.min(...blocksToKeep);
+        
+        logger.info(`BlockPreprocessorWorker: Block count (${currentBlockCount}) reached ${MAX_BLOCKS}, cleaning up transactions below height ${minHeightToKeep}`);
+        
+        const deleteResult = await Transaction.deleteBeforeHeight(minHeightToKeep);
+        
+        logger.info(`BlockPreprocessorWorker: Cleaned up ${deleteResult.deletedCount} transactions from old blocks, maintaining ${TARGET_BLOCKS} newest blocks`);
+      }
 
       const blockchainInfo = await serviceManager.getBlockchainInfo();
       const latestHeight = blockchainInfo.blocks;
-      const startHeight = Math.max(0, latestHeight - 99);
+      const startHeight = Math.max(0, latestHeight - 999); // Latest 1000 blocks
 
       logger.info("BlockPreprocessorWorker: Transaction preprocessing range", {
         startHeight,
@@ -299,24 +378,29 @@ class BlockPreprocessorWorker {
         }
       }
 
-      const allTxIds = [];
+      // Process transactions block by block to maintain blockHeight information
+      let totalProcessed = 0;
+      let totalSaved = 0;
+      let totalErrors = 0;
       let processedBlocks = 0;
 
       for (const height of heights) {
         const block = blockMap.get(height);
         if (block && block.tx) {
-          allTxIds.push(...block.tx);
+          logger.debug(`BlockPreprocessorWorker: Processing transactions from block ${height} (${block.tx.length} transactions)`);
+          
+          const blockResult = await this.processBlockTransactions(height, block.tx);
+          totalProcessed += blockResult.totalProcessed;
+          totalSaved += blockResult.totalSaved;
+          totalErrors += blockResult.totalErrors;
           processedBlocks++;
         }
       }
 
       this.stats.txPreprocessing.blocksProcessed = processedBlocks;
-
-      logger.info(`BlockPreprocessorWorker: Collected ${allTxIds.length} transaction IDs from ${processedBlocks} blocks`);
-
-      if (allTxIds.length > 0) {
-        await this.processTransactionBatch(allTxIds);
-      }
+      this.stats.txPreprocessing.totalTxProcessed = totalProcessed;
+      this.stats.txPreprocessing.totalTxSaved = totalSaved;
+      this.stats.txPreprocessing.totalTxErrors = totalErrors;
 
       logger.info("BlockPreprocessorWorker: Transaction preprocessing completed", {
         blocksProcessed: this.stats.txPreprocessing.blocksProcessed,
@@ -334,39 +418,37 @@ class BlockPreprocessorWorker {
     }
   }
 
-  async processTransactionBatch(txIds) {
+  async processBlockTransactions(blockHeight, txIds) {
     try {
+      logger.debug(`BlockPreprocessorWorker: Processing ${txIds.length} transactions from block ${blockHeight}`);
+
+      // Get existing transactions to avoid duplicates
       const existingTransactions = await Transaction.find({ txid: { $in: txIds } }).select('txid');
       const existingTxIds = new Set(existingTransactions.map(tx => tx.txid));
       const missingTxIds = txIds.filter(txid => !existingTxIds.has(txid));
 
-      logger.info(`BlockPreprocessorWorker: Found ${existingTransactions.length} existing transactions, ${missingTxIds.length} missing`);
-
       if (missingTxIds.length === 0) {
-        logger.info("BlockPreprocessorWorker: All transactions already exist in database");
-        return;
+        logger.debug(`BlockPreprocessorWorker: All transactions from block ${blockHeight} already exist in database`);
+        return {
+          totalProcessed: txIds.length,
+          totalSaved: 0,
+          totalErrors: 0
+        };
       }
 
-      this.stats.txPreprocessing.totalTxProcessed = missingTxIds.length;
-
-      const txBatchSize = 500;
-      const txBatches = [];
-      
-      for (let i = 0; i < missingTxIds.length; i += txBatchSize) {
-        txBatches.push(missingTxIds.slice(i, i + txBatchSize));
+      // Process transactions in batches (same as ZeroMQ)
+      const BATCH_SIZE = 500;
+      const batches = [];
+      for (let i = 0; i < missingTxIds.length; i += BATCH_SIZE) {
+        batches.push(missingTxIds.slice(i, i + BATCH_SIZE));
       }
-
-      logger.info(`BlockPreprocessorWorker: Processing ${missingTxIds.length} transactions in ${txBatches.length} batches`);
 
       let totalSaved = 0;
       let totalErrors = 0;
 
-      for (let i = 0; i < txBatches.length; i++) {
-        const batch = txBatches[i];
-        
+      for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i];
         try {
-          logger.info(`BlockPreprocessorWorker: Processing transaction batch ${i + 1}/${txBatches.length} (${batch.length} transactions)`);
-          
           const rawTxs = await serviceManager.getRawTransactionsHex(batch);
           
           const txDocs = [];
@@ -377,7 +459,8 @@ class BlockPreprocessorWorker {
             if (rawTx) {
               txDocs.push({
                 txid: txid,
-                raw: rawTx
+                raw: rawTx,
+                blockHeight: blockHeight // Include blockHeight like ZeroMQ
               });
             } else {
               logger.warn(`BlockPreprocessorWorker: Failed to get raw transaction for txid: ${txid}`);
@@ -388,80 +471,59 @@ class BlockPreprocessorWorker {
           if (txDocs.length > 0) {
             try {
               const result = await Transaction.insertMany(txDocs, { 
-                ordered: false, 
+                ordered: false,
                 rawResult: true 
               });
               const savedCount = result.insertedCount || txDocs.length;
               totalSaved += savedCount;
-              logger.info(`BlockPreprocessorWorker: Saved ${savedCount} transactions from batch ${i + 1}`);
-              
+              logger.debug(`BlockPreprocessorWorker: Saved ${savedCount} transactions from block ${blockHeight} batch ${i + 1}`);
             } catch (error) {
               if (error.code === 11000 && error.writeErrors) {
                 const successCount = txDocs.length - error.writeErrors.length;
                 totalSaved += successCount;
-                logger.info(`BlockPreprocessorWorker: Batch ${i + 1} completed with ${error.writeErrors.length} duplicates, ${successCount} saved`);
+                logger.debug(`BlockPreprocessorWorker: Batch insert completed with ${error.writeErrors.length} duplicates, ${successCount} succeeded`);
               } else {
-                logger.error(`BlockPreprocessorWorker: Transaction batch ${i + 1} insert failed`, {
-                  error: error.message,
-                  txCount: txDocs.length
-                });
-                
-                for (const txData of txDocs) {
-                  try {
-                    const txDoc = new Transaction(txData);
-                    await txDoc.save();
-                    totalSaved++;
-                  } catch (saveError) {
-                    if (saveError.code === 11000) {
-                      logger.debug(`BlockPreprocessorWorker: Transaction ${txData.txid} already exists, skipping`);
-                    } else {
-                      logger.warn(`BlockPreprocessorWorker: Failed to save transaction ${txData.txid}`, {
-                        error: saveError.message
-                      });
-                      totalErrors++;
-                    }
-                  }
-                }
+                throw error;
               }
             }
           }
-
-          if (i < txBatches.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
-
         } catch (error) {
-          logger.error(`BlockPreprocessorWorker: Transaction batch ${i + 1} processing failed`, {
+          logger.error(`BlockPreprocessorWorker: Error processing transaction batch from block ${blockHeight}`, {
             error: error.message,
+            batchIndex: i,
             batchSize: batch.length
           });
           totalErrors += batch.length;
         }
       }
 
-      this.stats.txPreprocessing.totalTxSaved = totalSaved;
-      this.stats.txPreprocessing.totalTxErrors = totalErrors;
-
-      logger.info(`BlockPreprocessorWorker: Transaction batch processing completed`, {
+      logger.debug(`BlockPreprocessorWorker: Completed processing transactions from block ${blockHeight}`, {
         totalProcessed: missingTxIds.length,
-        totalSaved: totalSaved,
-        totalErrors: totalErrors,
+        totalSaved,
+        totalErrors,
         successRate: `${((totalSaved / missingTxIds.length) * 100).toFixed(1)}%`
       });
 
-      const finalStats = await Transaction.getStats();
-      logger.info(`BlockPreprocessorWorker: Final transaction database statistics`, finalStats);
+      return {
+        totalProcessed: missingTxIds.length,
+        totalSaved,
+        totalErrors
+      };
 
     } catch (error) {
-      logger.error("BlockPreprocessorWorker: Transaction batch processing failed", {
+      logger.error(`BlockPreprocessorWorker: Error in processBlockTransactions for block ${blockHeight}`, {
         error: error.message,
         stack: error.stack
       });
-      throw error;
+      return {
+        totalProcessed: txIds.length,
+        totalSaved: 0,
+        totalErrors: txIds.length
+      };
     }
   }
 
-  complete() {
+  async complete() {
     const endTime = new Date();
     const duration = endTime - this.stats.startTime;
 
@@ -473,6 +535,22 @@ class BlockPreprocessorWorker {
       duration: `${Math.floor(duration / 1000)}s`,
       averageTimePerBatch: `${Math.floor(duration / this.stats.currentBatch)}ms`
     });
+
+    // 最终更新配置文件
+    try {
+      const config = await this.loadConfig();
+      config.lastProcessedHeight = this.stats.latestHeight;
+      config.lastUpdated = new Date().toISOString();
+      config.totalProcessed = this.stats.totalProcessed;
+      await this.saveConfig(config);
+      logger.info("BlockPreprocessorWorker: Final progress saved to config file", {
+        lastProcessedHeight: config.lastProcessedHeight
+      });
+    } catch (error) {
+      logger.error("BlockPreprocessorWorker: Failed to save final progress", {
+        error: error.message
+      });
+    }
 
     this.isRunning = false;
 
