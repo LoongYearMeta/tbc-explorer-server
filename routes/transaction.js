@@ -2,6 +2,7 @@ import express from "express";
 
 import serviceManager from "../services/ServiceManager.js";
 import logger from "../config/logger.js";
+import { Transaction } from "../models/transaction.js";
 
 const router = express.Router();
 
@@ -56,7 +57,16 @@ router.get("/:txid/raw", async (req, res, next) => {
       ip: req.ip,
     });
 
-    const rawTransaction = await serviceManager.getRawTransactionHex(txid);
+    let rawTransaction = "";
+    
+    const dbTransaction = await Transaction.findOne({ txid }).lean();
+    if (dbTransaction) {
+      rawTransaction = dbTransaction.raw;
+      logger.debug(`Raw transaction ${txid} found in database`);
+    } else {
+      logger.debug(`Raw transaction ${txid} not found in database, fetching from RPC`);
+      rawTransaction = await serviceManager.getRawTransactionHex(txid);
+    }
 
     if (!rawTransaction) {
       return res.status(404).json({
@@ -107,7 +117,26 @@ router.post("/batch/raw", async (req, res, next) => {
       ip: req.ip,
     });
 
-    const rawTransactions = await serviceManager.getRawTransactionsHex(txids);
+    const dbTransactions = await Transaction.find({ txid: { $in: txids } }).lean();
+    const dbTxMap = new Map(dbTransactions.map(tx => [tx.txid, tx.raw]));
+    
+    const missingTxids = txids.filter(txid => !dbTxMap.has(txid));
+    
+    logger.debug(`Found ${dbTransactions.length} transactions in database, ${missingTxids.length} missing`);
+
+    let rpcTransactions = [];
+    if (missingTxids.length > 0) {
+      rpcTransactions = await serviceManager.getRawTransactionsHex(missingTxids);
+    }
+
+    const rawTransactions = txids.map((txid, index) => {
+      if (dbTxMap.has(txid)) {
+        return dbTxMap.get(txid);
+      } else {
+        const rpcIndex = missingTxids.indexOf(txid);
+        return (rpcIndex !== -1) ? rpcTransactions[rpcIndex] : null;
+      }
+    });
 
     const result = txids.map((txid, index) => ({
       txid,

@@ -237,30 +237,6 @@ class ZeroMQService {
     };
   }
 
-  async getTransactionStats() {
-    try {
-      const stats = await Transaction.getStats();
-      return {
-        ...stats,
-        memoryUsage: process.memoryUsage(),
-        timestamp: new Date().toISOString()
-      };
-    } catch (error) {
-      logger.error('[ZMQ] Error getting transaction stats', {
-        error: error.message
-      });
-      return {
-        error: error.message,
-        timestamp: new Date().toISOString()
-      };
-    }
-  }
-
-  async logTransactionStats() {
-    const stats = await this.getTransactionStats();
-    logger.info('[ZMQ] Transaction database statistics', stats);
-  }
-
   async onNewBlockHash(blockHash) {
     try {
       logger.info(`[ZMQ] Processing new block hash: ${blockHash}`);
@@ -312,11 +288,6 @@ class ZeroMQService {
 
       // Process transactions from the new block
       await this.processBlockTransactions(blockDetails);
-      
-      // Log transaction stats every 10 blocks
-      if (blockDetails.height % 10 === 0) {
-        await this.logTransactionStats();
-      }
       
     } catch (error) {
       if (error.code === 11000) {
@@ -480,15 +451,27 @@ class ZeroMQService {
     const closePromises = [];
     for (const [name, subscriptionData] of this.subscribers.entries()) {
       if (subscriptionData.subscriber) {
-        closePromises.push(
-          subscriptionData.subscriber.close().catch(error => {
-            logger.debug(`[ZMQ] Error closing subscription ${name}:`, error.message);
-          })
-        );
+        try {
+          const closePromise = subscriptionData.subscriber.close();
+          // Only add to promises if close() returns a Promise
+          if (closePromise && typeof closePromise.catch === 'function') {
+            closePromises.push(
+              closePromise.catch(error => {
+                logger.debug(`[ZMQ] Error closing subscription ${name}:`, error.message);
+              })
+            );
+          }
+        } catch (error) {
+          logger.debug(`[ZMQ] Error calling close() for subscription ${name}:`, error.message);
+        }
         subscriptionData.connected = false;
       }
     }
-    await Promise.allSettled(closePromises);
+    
+    if (closePromises.length > 0) {
+      await Promise.allSettled(closePromises);
+    }
+    
     this.subscribers.clear();
     logger.info('[ZMQ] ZeroMQ service stopped successfully');
   }
