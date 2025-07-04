@@ -68,9 +68,7 @@ router.get("/:txid/raw", async (req, res, next) => {
 
     res.status(200).json({
       txid,
-      rawTransaction,
-      size: rawTransaction.length / 2,
-      timestamp: new Date().toISOString()
+      rawTransaction
     });
   } catch (error) {
     next(error);
@@ -88,9 +86,9 @@ router.post("/batch/raw", async (req, res, next) => {
       });
     }
 
-    if (txids.length > 1000) {
+    if (txids.length > 500) {
       return res.status(400).json({
-        error: "Maximum 1000 transaction IDs allowed per request",
+        error: "Maximum 500 transaction IDs allowed per request",
         timestamp: new Date().toISOString()
       });
     }
@@ -114,18 +112,13 @@ router.post("/batch/raw", async (req, res, next) => {
     const result = txids.map((txid, index) => ({
       txid,
       rawTransaction: rawTransactions[index] || null,
-      found: !!rawTransactions[index],
-      size: rawTransactions[index] ? rawTransactions[index].length / 2 : 0
+      found: !!rawTransactions[index]
     }));
-
-    const totalSize = result.reduce((acc, item) => acc + item.size, 0);
 
     res.status(200).json({
       results: result,
       total: txids.length,
-      found: result.filter(r => r.found).length,
-      totalSize: totalSize,
-      timestamp: new Date().toISOString()
+      found: result.filter(r => r.found).length
     });
   } catch (error) {
     next(error);

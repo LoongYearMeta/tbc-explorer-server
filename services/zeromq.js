@@ -2,6 +2,7 @@ import zmq from "zeromq";
 
 import logger from "../config/logger.js";
 import { Block } from "../models/block.js";
+import { Transaction } from "../models/transaction.js";
 
 class ZeroMQService {
   constructor(config) {
@@ -236,6 +237,30 @@ class ZeroMQService {
     };
   }
 
+  async getTransactionStats() {
+    try {
+      const stats = await Transaction.getStats();
+      return {
+        ...stats,
+        memoryUsage: process.memoryUsage(),
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      logger.error('[ZMQ] Error getting transaction stats', {
+        error: error.message
+      });
+      return {
+        error: error.message,
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
+
+  async logTransactionStats() {
+    const stats = await this.getTransactionStats();
+    logger.info('[ZMQ] Transaction database statistics', stats);
+  }
+
   async onNewBlockHash(blockHash) {
     try {
       logger.info(`[ZMQ] Processing new block hash: ${blockHash}`);
@@ -284,6 +309,14 @@ class ZeroMQService {
       
       await blockDoc.save();
       logger.info(`[ZMQ] Successfully saved block ${blockHash} (height: ${blockDetails.height}) to database`);
+
+      // Process transactions from the new block
+      await this.processBlockTransactions(blockDetails);
+      
+      // Log transaction stats every 10 blocks
+      if (blockDetails.height % 10 === 0) {
+        await this.logTransactionStats();
+      }
       
     } catch (error) {
       if (error.code === 11000) {
@@ -294,6 +327,120 @@ class ZeroMQService {
           stack: error.stack
         });
       }
+    }
+  }
+
+  async processBlockTransactions(blockDetails) {
+    try {
+      const { height, tx: txIds } = blockDetails;
+      
+      // First, check if we need to clean up old transactions
+      const MAX_BLOCKS = 1000;  // When reaching this, trigger cleanup
+      const TARGET_BLOCKS = 900; // Keep this many blocks after cleanup
+      
+      // Get the actual count of distinct block heights in the database
+      const currentBlockCount = await Transaction.getDistinctBlockCount();
+      
+      if (currentBlockCount >= MAX_BLOCKS) {
+        // When we reach 1000 blocks, keep only the newest 900 blocks
+        const sortedHeights = await Transaction.getDistinctBlockHeights(-1); // Sort descending
+        const blocksToKeep = sortedHeights.slice(0, TARGET_BLOCKS);
+        const minHeightToKeep = Math.min(...blocksToKeep);
+        
+        logger.info(`[ZMQ] Block count (${currentBlockCount}) reached ${MAX_BLOCKS}, cleaning up transactions below height ${minHeightToKeep}`);
+        
+        const deleteResult = await Transaction.deleteBeforeHeight(minHeightToKeep);
+        
+        logger.info(`[ZMQ] Cleaned up ${deleteResult.deletedCount} transactions from old blocks, maintaining ${TARGET_BLOCKS} newest blocks`);
+      }
+
+      // Process new transactions
+      logger.info(`[ZMQ] Processing ${txIds.length} transactions from block ${height}`);
+
+      // Get existing transactions to avoid duplicates
+      const existingTransactions = await Transaction.find({ txid: { $in: txIds } }).select('txid');
+      const existingTxIds = new Set(existingTransactions.map(tx => tx.txid));
+      const missingTxIds = txIds.filter(txid => !existingTxIds.has(txid));
+
+      if (missingTxIds.length === 0) {
+        logger.info(`[ZMQ] All transactions from block ${height} already exist in database`);
+        return;
+      }
+
+      // Process transactions in batches
+      const BATCH_SIZE = 500;
+      const batches = [];
+      for (let i = 0; i < missingTxIds.length; i += BATCH_SIZE) {
+        batches.push(missingTxIds.slice(i, i + BATCH_SIZE));
+      }
+
+      let totalSaved = 0;
+      let totalErrors = 0;
+
+      for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i];
+        try {
+          const rawTxs = await this.serviceManager.getRawTransactionsHex(batch);
+          
+          const txDocs = [];
+          for (let j = 0; j < batch.length; j++) {
+            const txid = batch[j];
+            const rawTx = rawTxs[j];
+            
+            if (rawTx) {
+              txDocs.push({
+                txid: txid,
+                raw: rawTx,
+                blockHeight: height
+              });
+            } else {
+              logger.warn(`[ZMQ] Failed to get raw transaction for txid: ${txid}`);
+              totalErrors++;
+            }
+          }
+
+          if (txDocs.length > 0) {
+            try {
+              const result = await Transaction.insertMany(txDocs, { 
+                ordered: false,
+                rawResult: true 
+              });
+              const savedCount = result.insertedCount || txDocs.length;
+              totalSaved += savedCount;
+              logger.debug(`[ZMQ] Saved ${savedCount} transactions from block ${height} batch ${i + 1}`);
+            } catch (error) {
+              if (error.code === 11000 && error.writeErrors) {
+                const successCount = txDocs.length - error.writeErrors.length;
+                totalSaved += successCount;
+                logger.debug(`[ZMQ] Batch insert completed with ${error.writeErrors.length} duplicates, ${successCount} succeeded`);
+              } else {
+                throw error;
+              }
+            }
+          }
+        } catch (error) {
+          logger.error(`[ZMQ] Error processing transaction batch from block ${height}`, {
+            error: error.message,
+            batchIndex: i,
+            batchSize: batch.length
+          });
+          totalErrors += batch.length;
+        }
+      }
+
+      logger.info(`[ZMQ] Completed processing transactions from block ${height}`, {
+        totalProcessed: missingTxIds.length,
+        totalSaved,
+        totalErrors,
+        successRate: `${((totalSaved / missingTxIds.length) * 100).toFixed(1)}%`
+      });
+
+    } catch (error) {
+      logger.error(`[ZMQ] Error in processBlockTransactions`, {
+        error: error.message,
+        stack: error.stack,
+        blockHeight: blockDetails.height
+      });
     }
   }
 
@@ -316,6 +463,34 @@ class ZeroMQService {
         stack: error.stack
       });
     }
+  }
+
+  async stop() {
+    if (!this.isRunning) {
+      logger.info('[ZMQ] ZeroMQ service is not running');
+      return;
+    }
+    logger.info('[ZMQ] Stopping ZeroMQ service...');
+    this.isRunning = false;
+    for (const [name, timeout] of this.reconnectTimeouts.entries()) {
+      clearTimeout(timeout);
+      this.reconnectTimeouts.delete(name);
+      logger.debug(`[ZMQ] Cleared reconnect timeout for ${name}`);
+    }
+    const closePromises = [];
+    for (const [name, subscriptionData] of this.subscribers.entries()) {
+      if (subscriptionData.subscriber) {
+        closePromises.push(
+          subscriptionData.subscriber.close().catch(error => {
+            logger.debug(`[ZMQ] Error closing subscription ${name}:`, error.message);
+          })
+        );
+        subscriptionData.connected = false;
+      }
+    }
+    await Promise.allSettled(closePromises);
+    this.subscribers.clear();
+    logger.info('[ZMQ] ZeroMQ service stopped successfully');
   }
 }
 

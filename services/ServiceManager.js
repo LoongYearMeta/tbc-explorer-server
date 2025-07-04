@@ -177,16 +177,23 @@ class ServiceManager {
 
   calculateOptimalBatchSize(totalRequests) {
     const { defaultBatchSize, maxBatchSize, minBatchSize } = this.performanceConfig;
+    
     if (totalRequests <= defaultBatchSize) {
       return totalRequests;
     }
+    
     if (totalRequests > 1000) {
       return Math.max(minBatchSize, Math.min(defaultBatchSize * 0.75, maxBatchSize));
     }
 
+    if (totalRequests > 100 && totalRequests <= 500) {
+      return Math.max(minBatchSize, Math.min(maxBatchSize, totalRequests));
+    }
+    
     if (totalRequests > 500) {
       return Math.max(minBatchSize, Math.min(defaultBatchSize, maxBatchSize));
     }
+    
     return Math.max(minBatchSize, Math.min(defaultBatchSize * 1.2, maxBatchSize));
   }
 
@@ -956,6 +963,25 @@ class ServiceManager {
 
   getZeroMQService() {
     return this.zmqService;
+  }
+
+  async shutdown() {
+    logger.info('ServiceManager: Starting shutdown process...');
+    
+    try {
+      if (this.zmqService) {
+        await this.zmqService.stop();
+      }
+      this.rpcClients = {};
+      this.initialized = false;
+      
+      logger.info('ServiceManager: Shutdown completed successfully');
+    } catch (error) {
+      logger.error('ServiceManager: Error during shutdown', {
+        error: error.message,
+        stack: error.stack
+      });
+    }
   }
 }
 

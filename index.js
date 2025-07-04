@@ -7,7 +7,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 import logger from "./config/logger.js";
-import connectDB from "./config/db.js";
+import { connectDB, disconnectDB } from "./config/db.js";
+import { connectRedis, disconnectRedis, redis } from "./config/redis.js";
 import {
   requestLogger,
   errorLogger,
@@ -46,12 +47,21 @@ app.get("/health", (req, res) => {
     readyState: dbState
   };
 
-  const overallHealthy = serviceStatus.initialized && dbStatus.connected;
+  const redisStatus = {
+    connected: redis.status === 'ready',
+    state: redis.status,
+    host: redis.options.host,
+    port: redis.options.port,
+    keyPrefix: redis.options.keyPrefix
+  };
+
+  const overallHealthy = serviceStatus.initialized && dbStatus.connected && redisStatus.connected;
 
   logger.info("Health check request", {
     ip: req.ip,
     serviceStatus: serviceStatus.initialized,
     dbStatus: dbStatus.connected,
+    redisStatus: redisStatus.connected,
     overallHealthy
   });
 
@@ -61,6 +71,7 @@ app.get("/health", (req, res) => {
     timestamp: new Date().toISOString(),
     services: serviceStatus,
     database: dbStatus,
+    redis: redisStatus,
   });
 });
 
@@ -102,13 +113,16 @@ async function startServer() {
     logger.info("Starting database connection...");
     await connectDB();
     
+    logger.info("Starting Redis connection...");
+    await connectRedis();
+    
     logger.info("Starting external service connections initialization...");
     await serviceManager.initialize();
 
     app.listen(PORT, () => {
       logger.info(`Server is running on port ${PORT}`);
       logger.info("Application started successfully");
-      logger.info("All services are ready (database + external services)");
+      logger.info("All services are ready (database + Redis + external services)");
 
       logger.info("Available API endpoints:");
       logger.info("  GET  /health                              - Health check");
@@ -121,7 +135,7 @@ async function startServer() {
       logger.info("  POST /block/heights                   - Get multiple blocks");
       logger.info("  GET  /transaction/:txid               - Get transaction");
       logger.info("  GET  /transaction/:txid/raw           - Get raw transaction (hex)");
-      logger.info("  POST /transaction/batch/raw           - Get multiple raw transactions (hex)");
+      logger.info("  POST /transaction/batch/raw           - Get multiple raw transactions (max 500)");
       logger.info("  GET  /chain                           - Get blockchain info");
       logger.info("  GET  /chain/mining                    - Get mining info");
       logger.info("  GET  /chain/txstats/:count            - Get transaction stats");
@@ -135,7 +149,6 @@ async function startServer() {
       logger.info("  tcp://0.0.0.0:28333                   - Transaction hash notifications");
     });
 
-    // 启动预处理worker进程
     logger.info("Starting block preprocessor worker process...");
     const workerPath = path.join(__dirname, 'workers', 'blockPreprocessorWorker.js');
     const workerProcess = spawn('node', [workerPath], {
@@ -168,7 +181,7 @@ async function startServer() {
     process.workerProcess = workerProcess;
     
   } catch (error) {
-    logger.error("Application startup failed (database or external services)", {
+    logger.error("Application startup failed (database, Redis, or external services)", {
       error: error.message,
       stack: error.stack,
     });
@@ -205,6 +218,15 @@ async function gracefulShutdown(signal) {
       }
     });
   }
+  
+  logger.info('Disconnecting Redis...');
+  await disconnectRedis();
+  
+  logger.info('Shutting down ServiceManager...');
+  await serviceManager.shutdown();
+  
+  logger.info('Disconnecting MongoDB...');
+  await disconnectDB();
   
   logger.info('Main process shutting down...');
   process.exit(0);
