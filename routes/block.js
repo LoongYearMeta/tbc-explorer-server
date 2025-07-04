@@ -6,6 +6,32 @@ import { Block } from "../models/block.js";
 
 const router = express.Router();
 
+function formatBlockResponse(block) {
+  if (!block) return null;
+  return {
+    tx: block.tx,
+    hash: block.hash,
+    confirmations: block.confirmations,
+    size: block.size,
+    height: block.height,
+    version: block.version,
+    versionHex: block.versionHex,
+    merkleroot: block.merkleroot,
+    num_tx: block.num_tx,
+    time: block.time,
+    mediantime: block.mediantime,
+    nonce: block.nonce,
+    bits: block.bits,
+    difficulty: block.difficulty,
+    chainwork: block.chainwork,
+    previousblockhash: block.previousblockhash,
+    nextblockhash: block.nextblockhash,
+    coinbaseTx: block.coinbaseTx,
+    totalFees: block.totalFees,
+    miner: block.miner
+  };
+}
+
 router.get("/height/:height", async (req, res, next) => {
   try {
     const height = parseInt(req.params.height);
@@ -71,7 +97,7 @@ router.get("/height/:height", async (req, res, next) => {
     }
 
     res.status(200).json({
-      block
+      block: formatBlockResponse(block)
     });
   } catch (error) {
     next(error);
@@ -138,7 +164,7 @@ router.get("/hash/:hash", async (req, res, next) => {
     }
 
     res.status(200).json({
-      block
+      block: formatBlockResponse(block)
     });
   } catch (error) {
     next(error);
@@ -252,7 +278,7 @@ router.post("/heights", async (req, res, next) => {
     const orderedBlocks = heights.map(height => blockMap.get(height)).filter(block => block !== undefined);
 
     res.status(200).json({
-      blocks: orderedBlocks,
+      blocks: orderedBlocks.map(block => formatBlockResponse(block)),
       total: orderedBlocks.length
     });
   } catch (error) {
@@ -355,7 +381,7 @@ router.get("/latest", async (req, res, next) => {
     const orderedBlocks = heights.map(height => blockMap.get(height)).filter(block => block !== undefined);
 
     res.status(200).json({
-      blocks: orderedBlocks,
+      blocks: orderedBlocks.map(block => formatBlockResponse(block)),
       total: orderedBlocks.length,
       currentHeight: currentHeight
     });

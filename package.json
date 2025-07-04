@@ -1,7 +1,6 @@
 {
   "name": "tbc-explorer",
   "version": "1.0.0",
-  "description": "TBC Blockchain Explorer",
   "main": "index.js",
   "type": "module",
   "scripts": {

@@ -140,14 +140,12 @@ router.post("/batch/raw", async (req, res, next) => {
 
     const result = txids.map((txid, index) => ({
       txid,
-      rawTransaction: rawTransactions[index] || null,
-      found: !!rawTransactions[index]
+      rawTransaction: rawTransactions[index] || null
     }));
 
     res.status(200).json({
       results: result,
-      total: txids.length,
-      found: result.filter(r => r.found).length
+      total: txids.length
     });
   } catch (error) {
     next(error);

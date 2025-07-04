@@ -378,32 +378,85 @@ class BlockPreprocessorWorker {
         }
       }
 
-      // Process transactions block by block to maintain blockHeight information
+      // Step 1: Filter out blocks that are already completely processed
+      const blocksToProcess = [];
+      const completelyProcessedBlocks = [];
+      
+      logger.info("BlockPreprocessorWorker: Checking which blocks are already completely processed");
+      
+      // Get all transaction IDs from all blocks
+      const allBlockTxMap = new Map();
+      for (const height of heights) {
+        const block = blockMap.get(height);
+        if (block && block.tx && block.tx.length > 0) {
+          allBlockTxMap.set(height, block.tx);
+        }
+      }
+
+      // Batch query to check which transactions already exist
+      const allTxIds = Array.from(allBlockTxMap.values()).flat();
+      const existingTransactions = await Transaction.find({ txid: { $in: allTxIds } }).select('txid').lean();
+      const existingTxIds = new Set(existingTransactions.map(tx => tx.txid));
+
+      // Determine which blocks need processing
+      for (const [height, txIds] of allBlockTxMap) {
+        const missingTxIds = txIds.filter(txid => !existingTxIds.has(txid));
+        
+        if (missingTxIds.length === 0) {
+          // All transactions in this block already exist
+          completelyProcessedBlocks.push(height);
+        } else {
+          // This block has missing transactions
+          blocksToProcess.push({
+            height,
+            totalTxIds: txIds,
+            missingTxIds
+          });
+        }
+      }
+
+      logger.info("BlockPreprocessorWorker: Block filtering completed", {
+        totalBlocks: allBlockTxMap.size,
+        completelyProcessedBlocks: completelyProcessedBlocks.length,
+        blocksToProcess: blocksToProcess.length,
+        skippedBlocks: completelyProcessedBlocks.sort((a, b) => b - a).slice(0, 10) // Show first 10 skipped blocks
+      });
+
+      // Step 2: Process only the blocks that need processing
       let totalProcessed = 0;
       let totalSaved = 0;
       let totalErrors = 0;
       let processedBlocks = 0;
 
-      for (const height of heights) {
+      for (const blockInfo of blocksToProcess) {
+        const { height, totalTxIds, missingTxIds } = blockInfo;
+        
+        logger.debug(`BlockPreprocessorWorker: Processing block ${height} (${missingTxIds.length}/${totalTxIds.length} missing transactions)`);
+        
+        const blockResult = await this.processBlockTransactions(height, totalTxIds, missingTxIds);
+        totalProcessed += blockResult.totalProcessed;
+        totalSaved += blockResult.totalSaved;
+        totalErrors += blockResult.totalErrors;
+        processedBlocks++;
+      }
+
+      // Add stats for completely processed blocks
+      for (const height of completelyProcessedBlocks) {
         const block = blockMap.get(height);
         if (block && block.tx) {
-          logger.debug(`BlockPreprocessorWorker: Processing transactions from block ${height} (${block.tx.length} transactions)`);
-          
-          const blockResult = await this.processBlockTransactions(height, block.tx);
-          totalProcessed += blockResult.totalProcessed;
-          totalSaved += blockResult.totalSaved;
-          totalErrors += blockResult.totalErrors;
-          processedBlocks++;
+          totalProcessed += block.tx.length;
         }
       }
 
-      this.stats.txPreprocessing.blocksProcessed = processedBlocks;
+      this.stats.txPreprocessing.blocksProcessed = processedBlocks + completelyProcessedBlocks.length;
       this.stats.txPreprocessing.totalTxProcessed = totalProcessed;
       this.stats.txPreprocessing.totalTxSaved = totalSaved;
       this.stats.txPreprocessing.totalTxErrors = totalErrors;
 
       logger.info("BlockPreprocessorWorker: Transaction preprocessing completed", {
         blocksProcessed: this.stats.txPreprocessing.blocksProcessed,
+        blocksSkipped: completelyProcessedBlocks.length,
+        blocksActuallyProcessed: processedBlocks,
         totalTxProcessed: this.stats.txPreprocessing.totalTxProcessed,
         totalTxSaved: this.stats.txPreprocessing.totalTxSaved,
         totalTxErrors: this.stats.txPreprocessing.totalTxErrors
@@ -418,16 +471,24 @@ class BlockPreprocessorWorker {
     }
   }
 
-  async processBlockTransactions(blockHeight, txIds) {
+  async processBlockTransactions(blockHeight, txIds, missingTxIds = null) {
     try {
-      logger.debug(`BlockPreprocessorWorker: Processing ${txIds.length} transactions from block ${blockHeight}`);
+      // If missingTxIds is provided, use it directly (optimization from preprocessTransactions)
+      let actualMissingTxIds = missingTxIds;
+      
+      if (!actualMissingTxIds) {
+        // Fallback to original logic if missingTxIds not provided
+        logger.debug(`BlockPreprocessorWorker: Processing ${txIds.length} transactions from block ${blockHeight}`);
 
-      // Get existing transactions to avoid duplicates
-      const existingTransactions = await Transaction.find({ txid: { $in: txIds } }).select('txid');
-      const existingTxIds = new Set(existingTransactions.map(tx => tx.txid));
-      const missingTxIds = txIds.filter(txid => !existingTxIds.has(txid));
+        // Get existing transactions to avoid duplicates
+        const existingTransactions = await Transaction.find({ txid: { $in: txIds } }).select('txid');
+        const existingTxIds = new Set(existingTransactions.map(tx => tx.txid));
+        actualMissingTxIds = txIds.filter(txid => !existingTxIds.has(txid));
+      } else {
+        logger.debug(`BlockPreprocessorWorker: Processing ${actualMissingTxIds.length}/${txIds.length} missing transactions from block ${blockHeight}`);
+      }
 
-      if (missingTxIds.length === 0) {
+      if (actualMissingTxIds.length === 0) {
         logger.debug(`BlockPreprocessorWorker: All transactions from block ${blockHeight} already exist in database`);
         return {
           totalProcessed: txIds.length,
@@ -439,8 +500,8 @@ class BlockPreprocessorWorker {
       // Process transactions in batches (same as ZeroMQ)
       const BATCH_SIZE = 500;
       const batches = [];
-      for (let i = 0; i < missingTxIds.length; i += BATCH_SIZE) {
-        batches.push(missingTxIds.slice(i, i + BATCH_SIZE));
+      for (let i = 0; i < actualMissingTxIds.length; i += BATCH_SIZE) {
+        batches.push(actualMissingTxIds.slice(i, i + BATCH_SIZE));
       }
 
       let totalSaved = 0;
@@ -498,14 +559,14 @@ class BlockPreprocessorWorker {
       }
 
       logger.debug(`BlockPreprocessorWorker: Completed processing transactions from block ${blockHeight}`, {
-        totalProcessed: missingTxIds.length,
+        totalProcessed: actualMissingTxIds.length,
         totalSaved,
         totalErrors,
-        successRate: `${((totalSaved / missingTxIds.length) * 100).toFixed(1)}%`
+        successRate: `${actualMissingTxIds.length > 0 ? ((totalSaved / actualMissingTxIds.length) * 100).toFixed(1) : '100.0'}%`
       });
 
       return {
-        totalProcessed: missingTxIds.length,
+        totalProcessed: actualMissingTxIds.length,
         totalSaved,
         totalErrors
       };
