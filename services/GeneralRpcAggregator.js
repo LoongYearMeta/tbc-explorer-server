@@ -11,8 +11,8 @@ class GeneralRpcAggregator {
     this.batchTimers = new Map(); 
     
     this.config = {
-      batchDelay: parseInt(process.env.GENERAL_RPC_BATCH_DELAY) || 100,
-      maxWaitTime: parseInt(process.env.GENERAL_RPC_MAX_WAIT_TIME) || 500,
+      batchDelay: parseInt(process.env.GENERAL_RPC_BATCH_DELAY) || 200,
+      maxWaitTime: parseInt(process.env.GENERAL_RPC_MAX_WAIT_TIME) || 1000,
       enableBatching: process.env.GENERAL_RPC_ENABLE_BATCHING !== 'false'
     };
     

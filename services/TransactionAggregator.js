@@ -10,9 +10,9 @@ class TransactionAggregator {
     this.pendingRequests = new Map(); 
     this.batchTimer = null;
     this.config = {
-      batchDelay: parseInt(process.env.TX_BATCH_DELAY) || 50, 
-      maxBatchSize: parseInt(process.env.TX_MAX_BATCH_SIZE) || 100,
-      maxWaitTime: parseInt(process.env.TX_MAX_WAIT_TIME) || 200,  
+      batchDelay: parseInt(process.env.TX_BATCH_DELAY) || 200, 
+      maxBatchSize: parseInt(process.env.TX_MAX_BATCH_SIZE) || 1000,
+      maxWaitTime: parseInt(process.env.TX_MAX_WAIT_TIME) || 1000,  
       enableBatching: process.env.TX_ENABLE_BATCHING !== 'false'
     };
     
@@ -89,9 +89,14 @@ class TransactionAggregator {
 
     try {
       const transactions = await serviceManager.getRawTransactions(uniqueTxids);
-      this.stats.batchedRequests += uniqueTxids.length;
+      
+      // 统计实际被批处理的请求总数
+      const totalRequestsInBatch = Array.from(currentRequests.values())
+        .reduce((sum, requests) => sum + requests.length, 0);
+      
+      this.stats.batchedRequests += totalRequestsInBatch;
       this.stats.rpcCalls += 1;
-      this.stats.timesSaved += uniqueTxids.length - 1; 
+      this.stats.timesSaved += totalRequestsInBatch - 1; 
       this.stats.averageBatchSize = this.stats.batchedRequests / this.stats.rpcCalls;
 
       const resultMap = new Map();
