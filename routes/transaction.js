@@ -1,6 +1,7 @@
 import express from "express";
 
 import serviceManager from "../services/ServiceManager.js";
+import transactionAggregator from "../services/TransactionAggregator.js";
 import redisService from "../services/RedisService.js";
 import logger from "../config/logger.js";
 import { Transaction } from "../models/transaction.js";
@@ -21,8 +22,8 @@ router.get("/:txid", async (req, res, next) => {
       txid,
       ip: req.ip,
     });
-
-    const transaction = await serviceManager.getRawTransaction(txid);
+    
+    const transaction = await transactionAggregator.getRawTransaction(txid);
 
     if (!transaction) {
       return res.status(404).json({
@@ -68,13 +69,13 @@ router.get("/:txid/raw", async (req, res, next) => {
     }
 
     if (!rawTransaction) {
-    const dbTransaction = await Transaction.findOne({ txid }).lean();
-    if (dbTransaction) {
-      rawTransaction = dbTransaction.raw;
-      logger.debug(`Raw transaction ${txid} found in database`);
-    } else {
-      logger.debug(`Raw transaction ${txid} not found in database, fetching from RPC`);
-      rawTransaction = await serviceManager.getRawTransactionHex(txid);
+      const dbTransaction = await Transaction.findOne({ txid }).lean();
+      if (dbTransaction) {
+        rawTransaction = dbTransaction.raw;
+        logger.debug(`Raw transaction ${txid} found in database`);
+      } else {
+        logger.debug(`Raw transaction ${txid} not found in database, fetching from RPC`);
+        rawTransaction = await serviceManager.getRawTransactionHex(txid);
         if (rawTransaction) {
           logger.debug(`Raw transaction ${txid} fetched from RPC`);
         }

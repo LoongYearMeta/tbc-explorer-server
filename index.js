@@ -14,6 +14,8 @@ import {
   errorLogger,
 } from "./middleware/requestLogger.js";
 import serviceManager from "./services/ServiceManager.js";
+import transactionAggregator from "./services/TransactionAggregator.js";
+import generalRpcAggregator from "./services/GeneralRpcAggregator.js";
 import addressRoutes from "./routes/address.js";
 import blockRoutes from "./routes/block.js";
 import transactionRoutes from "./routes/transaction.js";
@@ -70,6 +72,8 @@ app.get("/health", (req, res) => {
     }
   };
 
+  const aggregatorStatus = transactionAggregator.getStats();
+
   const overallHealthy = serviceStatus.initialized && dbStatus.connected && redisStatus.connected;
 
   logger.info("Health check request", {
@@ -89,6 +93,9 @@ app.get("/health", (req, res) => {
     database: dbStatus,
     redis: redisStatus,
     workers: workersStatus,
+    aggregator: {
+      transaction: aggregatorStatus
+    },
   });
 });
 
@@ -204,13 +211,13 @@ async function startServer() {
       logger.info("All services are ready (database + Redis + external services)");
 
       logger.info("Available API endpoints:");
-      logger.info("  GET  /health                              - Health check");
+      logger.info("  GET  /health                              - Health check (includes aggregator stats)");
       logger.info("  GET  /address/:address                - Get address info");
       logger.info("  GET  /block/height/:height            - Get block by height");
       logger.info("  GET  /block/hash/:hash                - Get block by hash");
       logger.info("  GET  /block/latest                    - Get latest 10 blocks");
       logger.info("  POST /block/heights                   - Get multiple blocks");
-      logger.info("  GET  /transaction/:txid               - Get transaction");
+      logger.info("  GET  /transaction/:txid               - Get transaction (with aggregator optimization)");
       logger.info("  GET  /transaction/:txid/raw           - Get raw transaction (hex)");
       logger.info("  POST /transaction/batch/raw           - Get multiple raw transactions (max 500)");
       logger.info("  GET  /chain                           - Get blockchain info");
@@ -388,6 +395,12 @@ async function gracefulShutdown(signal) {
 
   logger.info('Disconnecting Redis...');
   await disconnectRedis();
+
+  logger.info('Shutting down TransactionAggregator...');
+  await transactionAggregator.shutdown();
+
+  logger.info('Shutting down GeneralRpcAggregator...');
+  await generalRpcAggregator.shutdown();
 
   logger.info('Shutting down ServiceManager...');
   await serviceManager.shutdown();

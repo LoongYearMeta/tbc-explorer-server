@@ -1,6 +1,6 @@
 import express from "express";
 
-import serviceManager from "../services/ServiceManager.js";
+import generalRpcAggregator from "../services/GeneralRpcAggregator.js";
 import logger from "../config/logger.js";
 
 const router = express.Router();
@@ -12,8 +12,8 @@ router.get("/", async (req, res, next) => {
     });
 
     const [blockchainInfo, miningInfo] = await Promise.all([
-      serviceManager.getBlockchainInfo(),
-      serviceManager.getMiningInfo()
+      generalRpcAggregator.callRpc('getBlockchainInfo'),
+      generalRpcAggregator.callRpc('getMiningInfo')
     ]);
 
     res.status(200).json({
@@ -40,7 +40,7 @@ router.get("/txstats/:blockCount?", async (req, res, next) => {
       ip: req.ip,
     });
 
-    const txStats = await serviceManager.getChainTxStats(blockCount);
+    const txStats = await generalRpcAggregator.callRpc('getChainTxStats', [blockCount]);
 
     res.status(200).json({
       txStats,

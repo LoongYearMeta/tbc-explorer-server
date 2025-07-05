@@ -1,6 +1,6 @@
 import express from "express";
 
-import serviceManager from "../services/ServiceManager.js";
+import generalRpcAggregator from "../services/GeneralRpcAggregator.js";
 import logger from "../config/logger.js";
 
 const router = express.Router();
@@ -11,7 +11,7 @@ router.get("/info", async (req, res, next) => {
       ip: req.ip,
     });
 
-    const mempoolInfo = await serviceManager.getMempoolInfo();
+    const mempoolInfo = await generalRpcAggregator.callRpc('getMempoolInfo');
 
     res.status(200).json({
       mempoolInfo
@@ -27,7 +27,7 @@ router.get("/", async (req, res, next) => {
       ip: req.ip,
     });
 
-    const rawMempool = await serviceManager.getRawMempool();
+    const rawMempool = await generalRpcAggregator.callRpc('getRawMempool');
 
     res.status(200).json({
       txids: rawMempool || [],

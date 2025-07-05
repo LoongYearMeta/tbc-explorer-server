@@ -2,6 +2,7 @@ import axios from "axios";
 import crypto from "crypto";
 import bitcoin from "bitcoinjs-lib";
 import net from "net";
+import dotenv from "dotenv";
 
 import servicesConfig from "../config/services.js";
 import logger from "../config/logger.js";
@@ -11,6 +12,8 @@ import {
   getBlockTotalFeesFromCoinbaseTxAndBlockHeight,
   getMinerFromCoinbaseTx,
 } from "../lib/util.js";
+
+dotenv.config();
 
 class ServiceManager {
   constructor() {

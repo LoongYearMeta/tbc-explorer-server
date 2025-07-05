@@ -36,7 +36,6 @@ class RedisCacheWorker {
         logger.info("RedisCacheWorker: Starting cache worker");
 
         try {
-            // 清空所有相关缓存
             await this.clearAllCache();
 
             const [blocksCached, mempoolTxCached] = await Promise.all([
@@ -67,23 +66,18 @@ class RedisCacheWorker {
         try {
             logger.info("RedisCacheWorker: Clearing all existing cache");
 
-            // 清空区块缓存（必须使用完整前缀）
             const blockPattern = 'tbc-explorer:blocks:recent:*';
             const blockKeys = await redisService.exec('KEYS', blockPattern);
             if (blockKeys && blockKeys.length > 0) {
                 await redisService.exec('DEL', ...blockKeys);
                 logger.debug(`RedisCacheWorker: Cleared ${blockKeys.length} block cache entries`);
             }
-
-            // 清空内存池交易缓存（必须使用完整前缀）
             const mempoolPattern = 'tbc-explorer:mempool:tx:*';
             const mempoolKeys = await redisService.exec('KEYS', mempoolPattern);
             if (mempoolKeys && mempoolKeys.length > 0) {
                 await redisService.exec('DEL', ...mempoolKeys);
                 logger.debug(`RedisCacheWorker: Cleared ${mempoolKeys.length} mempool transaction cache entries`);
             }
-
-            // 清空区块队列
             await redisService.del('blocks:recent:queue');
 
             logger.info("RedisCacheWorker: Cache clearing completed");
@@ -123,7 +117,6 @@ class RedisCacheWorker {
             }
         }
 
-        // 缓存区块到Redis（按高度排序，从低到高）
         const sortedHeights = heights.sort((a, b) => a - b);
         let cachedCount = 0;
 
@@ -132,8 +125,6 @@ class RedisCacheWorker {
             if (block) {
                 const cacheKey = `blocks:recent:${height}`;
                 await redisService.setJSON(cacheKey, block);
-
-                // 添加到队列（队列保持高度顺序）
                 await redisService.rpush('blocks:recent:queue', height);
                 cachedCount++;
             }
@@ -200,10 +191,7 @@ class RedisCacheWorker {
             const queueLength = await redisService.llen('blocks:recent:queue');
 
             if (queueLength > this.maxRecentBlocks) {
-                // 计算需要移除的区块数量
                 const toRemove = queueLength - this.maxRecentBlocks;
-
-                // 从队列前端移除老区块的高度，并删除对应的缓存
                 for (let i = 0; i < toRemove; i++) {
                     const oldHeight = await redisService.lpop('blocks:recent:queue');
                     if (oldHeight) {
