@@ -1,21 +1,21 @@
 import dotenv from "dotenv";
 
 import logger from "../config/logger.js";
-import serviceManager from "./ServiceManager.js";
+import mempoolCache from "./MempoolCache.js";
 
 dotenv.config();
 
 class GeneralRpcAggregator {
   constructor() {
     this.pendingRequests = new Map();
-    this.batchTimers = new Map(); 
-    
+    this.batchTimers = new Map();
+
     this.config = {
-      batchDelay: parseInt(process.env.GENERAL_RPC_BATCH_DELAY) || 200,
-      maxWaitTime: parseInt(process.env.GENERAL_RPC_MAX_WAIT_TIME) || 1000,
+      batchDelay: parseInt(process.env.GENERAL_RPC_BATCH_DELAY) || 50,
+      maxWaitTime: parseInt(process.env.GENERAL_RPC_MAX_WAIT_TIME) || 100,
       enableBatching: process.env.GENERAL_RPC_ENABLE_BATCHING !== 'false'
     };
-    
+
     logger.info('GeneralRpcAggregator initialized', {
       config: this.config
     });
@@ -31,23 +31,23 @@ class GeneralRpcAggregator {
     }
 
     const requestKey = this.generateRequestKey(method, params);
-    
+
     return new Promise((resolve, reject) => {
       if (!this.pendingRequests.has(requestKey)) {
         this.pendingRequests.set(requestKey, []);
       }
-      
+
       const requests = this.pendingRequests.get(requestKey);
       requests.push({
         resolve,
         reject,
         timestamp: Date.now()
       });
-      
+
       if (requests.length === 1) {
         this.scheduleBatch(requestKey, method, params);
       }
-      
+
       setTimeout(() => {
         reject(new Error(`GeneralRpcAggregator: Request timeout for ${method}`));
       }, this.config.maxWaitTime);
@@ -55,10 +55,14 @@ class GeneralRpcAggregator {
   }
 
   scheduleBatch(requestKey, method, params) {
+    if (this.batchTimers.has(requestKey)) {
+      return;
+    }
+
     const timer = setTimeout(async () => {
       await this.processBatch(requestKey, method, params);
     }, this.config.batchDelay);
-    
+
     this.batchTimers.set(requestKey, timer);
   }
 
@@ -87,21 +91,21 @@ class GeneralRpcAggregator {
       requests.forEach(request => {
         request.resolve(result);
       });
-      
+
       if (requestCount > 1) {
         logger.debug(`GeneralRpcAggregator: Batch completed for ${method}`, {
           requestCount,
           savedCalls: requestCount - 1
         });
       }
-      
+
     } catch (error) {
       logger.error(`GeneralRpcAggregator: Batch failed for ${method}`, {
         error: error.message,
         requestCount,
         params
       });
-      
+
       requests.forEach(request => {
         request.reject(error);
       });
@@ -111,15 +115,15 @@ class GeneralRpcAggregator {
   async executeRpcCall(method, params) {
     switch (method) {
       case 'getBlockchainInfo':
-        return await serviceManager.getBlockchainInfo();
+        return await mempoolCache.getCachedOrFetch('getBlockchainInfo', params);
       case 'getMiningInfo':
-        return await serviceManager.getMiningInfo();
+        return await mempoolCache.getCachedOrFetch('getMiningInfo', params);
       case 'getChainTxStats':
-        return await serviceManager.getChainTxStats(params[0]);
+        return await mempoolCache.getCachedOrFetch('getChainTxStats', params);
       case 'getMempoolInfo':
-        return await serviceManager.getMempoolInfo();
+        return await mempoolCache.getCachedOrFetch('getMempoolInfo', params);
       case 'getRawMempool':
-        return await serviceManager.getRawMempool();
+        return await mempoolCache.getCachedOrFetch('getRawMempool', params);
       default:
         throw new Error(`Unsupported RPC method: ${method}`);
     }
@@ -129,25 +133,28 @@ class GeneralRpcAggregator {
 
   async shutdown() {
     logger.info('GeneralRpcAggregator: Starting shutdown...');
+
+    mempoolCache.shutdown();
+
     for (const timer of this.batchTimers.values()) {
       clearTimeout(timer);
     }
     this.batchTimers.clear();
     const totalPendingRequests = Array.from(this.pendingRequests.values())
       .reduce((sum, requests) => sum + requests.length, 0);
-    
+
     if (totalPendingRequests > 0) {
       logger.warn(`GeneralRpcAggregator: Rejecting ${totalPendingRequests} pending requests during shutdown`);
-      
+
       for (const requests of this.pendingRequests.values()) {
         requests.forEach(request => {
           request.reject(new Error('Service is shutting down'));
         });
       }
     }
-    
+
     this.pendingRequests.clear();
-    
+
     logger.info('GeneralRpcAggregator: Shutdown completed');
   }
 }

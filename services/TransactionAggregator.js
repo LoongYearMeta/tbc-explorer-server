@@ -10,18 +10,10 @@ class TransactionAggregator {
     this.pendingRequests = new Map(); 
     this.batchTimer = null;
     this.config = {
-      batchDelay: parseInt(process.env.TX_BATCH_DELAY) || 200, 
-      maxBatchSize: parseInt(process.env.TX_MAX_BATCH_SIZE) || 1000,
-      maxWaitTime: parseInt(process.env.TX_MAX_WAIT_TIME) || 1000,  
+      batchDelay: parseInt(process.env.TX_BATCH_DELAY) || 100, 
+      maxBatchSize: parseInt(process.env.TX_MAX_BATCH_SIZE) || 200,
+      maxWaitTime: parseInt(process.env.TX_MAX_WAIT_TIME) || 200,  
       enableBatching: process.env.TX_ENABLE_BATCHING !== 'false'
-    };
-    
-    this.stats = {
-      totalRequests: 0,
-      batchedRequests: 0,
-      rpcCalls: 0,
-      averageBatchSize: 0,
-      timesSaved: 0  
     };
   }
 
@@ -29,8 +21,6 @@ class TransactionAggregator {
     if (!this.config.enableBatching) {
       return await serviceManager.getRawTransaction(txid);
     }
-
-    this.stats.totalRequests++;
 
     return new Promise((resolve, reject) => {
       const requestId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -83,21 +73,11 @@ class TransactionAggregator {
     this.pendingRequests.clear();
 
     const uniqueTxids = Array.from(currentRequests.keys());
-    const batchSize = Math.min(uniqueTxids.length, this.config.maxBatchSize);
     
     logger.debug(`TransactionAggregator: Processing batch of ${uniqueTxids.length} unique transactions`);
 
     try {
       const transactions = await serviceManager.getRawTransactions(uniqueTxids);
-      
-      // 统计实际被批处理的请求总数
-      const totalRequestsInBatch = Array.from(currentRequests.values())
-        .reduce((sum, requests) => sum + requests.length, 0);
-      
-      this.stats.batchedRequests += totalRequestsInBatch;
-      this.stats.rpcCalls += 1;
-      this.stats.timesSaved += totalRequestsInBatch - 1; 
-      this.stats.averageBatchSize = this.stats.batchedRequests / this.stats.rpcCalls;
 
       const resultMap = new Map();
       for (let i = 0; i < uniqueTxids.length; i++) {
@@ -127,29 +107,6 @@ class TransactionAggregator {
         }
       }
     }
-  }
-
-  getStats() {
-    const totalRequestsHandled = this.stats.totalRequests;
-    const efficiency = totalRequestsHandled > 0 ? 
-      ((this.stats.timesSaved / totalRequestsHandled) * 100).toFixed(2) : 0;
-
-    return {
-      ...this.stats,
-      pendingRequests: this.pendingRequests.size,
-      efficiency: `${efficiency}%`, 
-      config: this.config
-    };
-  }
-
-  resetStats() {
-    this.stats = {
-      totalRequests: 0,
-      batchedRequests: 0,
-      rpcCalls: 0,
-      averageBatchSize: 0,
-      timesSaved: 0
-    };
   }
 
   async shutdown() {

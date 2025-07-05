@@ -177,25 +177,22 @@ class ServiceManager {
   calculateOptimalBatchSize(totalRequests) {
     const { defaultBatchSize, maxBatchSize, minBatchSize } = this.performanceConfig;
 
-    // 如果总数小于等于默认批次大小，直接返回总数
     if (totalRequests <= defaultBatchSize) {
       return totalRequests;
     }
 
-    // 根据总请求数量动态调整，保证批次大小随请求数量合理增长
     if (totalRequests <= 200) {
       return Math.min(totalRequests, maxBatchSize);
     }
 
     if (totalRequests <= 500) {
-      return Math.min(150, maxBatchSize);  // 中等数量用150个/批次
+      return Math.min(150, maxBatchSize);
     }
 
     if (totalRequests <= 1000) {
-      return Math.min(200, maxBatchSize);  // 较大数量用200个/批次（最大值）
+      return Math.min(200, maxBatchSize);
     }
 
-    // 超大数量时适当减少批次大小，避免单次请求过载
     return Math.min(150, maxBatchSize);
   }
 
