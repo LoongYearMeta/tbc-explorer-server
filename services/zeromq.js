@@ -12,10 +12,7 @@ class ZeroMQService {
     this.isRunning = false;
     this.reconnectTimeouts = new Map();
     this.messageHandlers = new Map();
-    this.stats = {
-      hashblock: { received: 0, errors: 0, lastReceived: null },
-      hashtx: { received: 0, errors: 0, lastReceived: null }
-    };
+
     this.serviceManager = null;
     this.setupDefaultHandlers();
   }
@@ -28,8 +25,6 @@ class ZeroMQService {
     this.messageHandlers.set('hashblock', (topic, message) => {
       const blockHash = message.toString('hex');
       logger.info(`[ZMQ] New block hash: ${blockHash}`);
-      this.stats.hashblock.received++;
-      this.stats.hashblock.lastReceived = new Date();
       this.onNewBlockHash(blockHash).catch(error => {
         logger.error(`[ZMQ] Error in onNewBlockHash handler: ${error.message}`);
       });
@@ -38,8 +33,6 @@ class ZeroMQService {
     this.messageHandlers.set('hashtx', (topic, message) => {
       const txHash = message.toString('hex');
       logger.info(`[ZMQ] New transaction hash: ${txHash}`);
-      this.stats.hashtx.received++;
-      this.stats.hashtx.lastReceived = new Date();
       this.onNewTransactionHash(txHash).catch(error => {
         logger.error(`[ZMQ] Error in onNewTransactionHash handler: ${error.message}`);
       });
@@ -149,7 +142,6 @@ class ZeroMQService {
         logger.error(`[ZMQ] Message handler error for ${name}`, {
           error: error.message
         });
-        this.stats[name].errors++;
         const subscription = this.subscribers.get(name);
         if (subscription) {
           subscription.connected = false;
@@ -218,26 +210,6 @@ class ZeroMQService {
       });
       this.scheduleReconnect(name);
     }
-  }
-
-  getStatus() {
-    const subscriptions = {};
-
-    for (const [name, subscriptionData] of this.subscribers.entries()) {
-      subscriptions[name] = {
-        connected: subscriptionData.connected,
-        address: subscriptionData.address,
-        lastError: subscriptionData.lastError?.message || null,
-        stats: this.stats[name]
-      };
-    }
-
-    return {
-      enabled: this.config.enabled,
-      running: this.isRunning,
-      subscriptions,
-      totalSubscriptions: this.subscribers.size
-    };
   }
 
   async onNewBlockHash(blockHash) {
