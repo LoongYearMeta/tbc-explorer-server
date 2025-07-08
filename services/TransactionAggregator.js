@@ -7,12 +7,12 @@ dotenv.config();
 
 class TransactionAggregator {
   constructor() {
-    this.pendingRequests = new Map(); 
+    this.pendingRequests = new Map();
     this.batchTimer = null;
     this.config = {
-      batchDelay: parseInt(process.env.TX_BATCH_DELAY) || 100, 
+      batchDelay: parseInt(process.env.TX_BATCH_DELAY) || 100,
       maxBatchSize: parseInt(process.env.TX_MAX_BATCH_SIZE) || 200,
-      maxWaitTime: parseInt(process.env.TX_MAX_WAIT_TIME) || 200,  
+      maxWaitTime: parseInt(process.env.TX_MAX_WAIT_TIME) || 2000,
       enableBatching: process.env.TX_ENABLE_BATCHING !== 'false'
     };
   }
@@ -73,7 +73,7 @@ class TransactionAggregator {
     this.pendingRequests.clear();
 
     const uniqueTxids = Array.from(currentRequests.keys());
-    
+
     logger.debug(`TransactionAggregator: Processing batch of ${uniqueTxids.length} unique transactions`);
 
     try {

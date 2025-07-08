@@ -23,6 +23,7 @@ import blockRoutes from "./routes/block.js";
 import transactionRoutes from "./routes/transaction.js";
 import chaininfoRoutes from "./routes/chaininfo.js";
 import mempoolRoutes from "./routes/mempool.js";
+import networkRoutes from "./routes/network.js";
 
 dotenv.config();
 
@@ -123,6 +124,7 @@ async function startHttpServer() {
   app.use("/transaction", transactionRoutes);
   app.use("/chain", chaininfoRoutes);
   app.use("/mempool", mempoolRoutes);
+  app.use("/network", networkRoutes);
 
   app.use(function (_req, _res, next) {
     next(createError(404));

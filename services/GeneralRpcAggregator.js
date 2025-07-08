@@ -11,8 +11,8 @@ class GeneralRpcAggregator {
     this.batchTimers = new Map();
 
     this.config = {
-      batchDelay: parseInt(process.env.GENERAL_RPC_BATCH_DELAY) || 50,
-      maxWaitTime: parseInt(process.env.GENERAL_RPC_MAX_WAIT_TIME) || 100,
+      batchDelay: parseInt(process.env.GENERAL_RPC_BATCH_DELAY) || 100,
+      maxWaitTime: parseInt(process.env.GENERAL_RPC_MAX_WAIT_TIME) || 2000,
       enableBatching: process.env.GENERAL_RPC_ENABLE_BATCHING !== 'false'
     };
 
@@ -124,12 +124,18 @@ class GeneralRpcAggregator {
         return await mempoolCache.getCachedOrFetch('getMempoolInfo', params);
       case 'getRawMempool':
         return await mempoolCache.getCachedOrFetch('getRawMempool', params);
+      case 'getNetworkInfo':
+        return await mempoolCache.getCachedOrFetch('getNetworkInfo', params);
+      case 'getNetTotals':
+        return await mempoolCache.getCachedOrFetch('getNetTotals', params);
+      case 'getUptimeSeconds':
+        return await mempoolCache.getCachedOrFetch('getUptimeSeconds', params);
+      case 'getPeerInfo':
+        return await mempoolCache.getCachedOrFetch('getPeerInfo', params);
       default:
         throw new Error(`Unsupported RPC method: ${method}`);
     }
   }
-
-
 
   async shutdown() {
     logger.info('GeneralRpcAggregator: Starting shutdown...');
