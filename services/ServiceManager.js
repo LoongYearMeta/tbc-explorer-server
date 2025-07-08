@@ -641,24 +641,12 @@ class ServiceManager {
     return this.getRpcData("getnetworkinfo");
   }
 
-  async getNetTotals() {
-    return this.getRpcData("getnettotals");
-  }
-
   async getMempoolInfo() {
     return this.getRpcData("getmempoolinfo");
   }
 
   async getMiningInfo() {
     return this.getRpcData("getmininginfo");
-  }
-
-  async getUptimeSeconds() {
-    return this.getRpcData("uptime");
-  }
-
-  async getPeerInfo() {
-    return this.getRpcData("getpeerinfo");
   }
 
   async getRawMempool() {

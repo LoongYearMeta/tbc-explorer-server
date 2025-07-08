@@ -5,7 +5,7 @@ import serviceManager from "./ServiceManager.js";
 
 dotenv.config();
 
-class MempoolCache {
+class Cache {
     constructor() {
         this.cache = new Map();
         this.config = {
@@ -15,9 +15,6 @@ class MempoolCache {
             miningInfoCacheTTL: parseInt(process.env.MINING_INFO_CACHE_TTL) || 10000,
             chainTxStatsCacheTTL: parseInt(process.env.CHAIN_TX_STATS_CACHE_TTL) || 30000,
             networkInfoCacheTTL: parseInt(process.env.NETWORK_INFO_CACHE_TTL) || 10000,
-            netTotalsCacheTTL: parseInt(process.env.NET_TOTALS_CACHE_TTL) || 5000,
-            uptimeCacheTTL: parseInt(process.env.UPTIME_CACHE_TTL) || 30000,
-            peerInfoCacheTTL: parseInt(process.env.PEER_INFO_CACHE_TTL) || 10000,
             maxCacheSize: parseInt(process.env.RPC_MAX_CACHE_SIZE) || 100,
         };
 
@@ -49,12 +46,6 @@ class MempoolCache {
                 return this.config.chainTxStatsCacheTTL;
             case 'getNetworkInfo':
                 return this.config.networkInfoCacheTTL;
-            case 'getNetTotals':
-                return this.config.netTotalsCacheTTL;
-            case 'getUptimeSeconds':
-                return this.config.uptimeCacheTTL;
-            case 'getPeerInfo':
-                return this.config.peerInfoCacheTTL;
             default:
                 return this.config.mempoolCacheTTL;
         }
@@ -183,15 +174,6 @@ class MempoolCache {
             case 'getNetworkInfo':
                 result = await serviceManager.getNetworkInfo();
                 break;
-            case 'getNetTotals':
-                result = await serviceManager.getNetTotals();
-                break;
-            case 'getUptimeSeconds':
-                result = await serviceManager.getUptimeSeconds();
-                break;
-            case 'getPeerInfo':
-                result = await serviceManager.getPeerInfo();
-                break;
             default:
                 throw new Error(`Unsupported cache method: ${method}`);
         }
@@ -218,6 +200,6 @@ class MempoolCache {
     }
 }
 
-const mempoolCache = new MempoolCache();
+const cache = new Cache();
 
-export default mempoolCache; 
+export default cache; 

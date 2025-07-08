@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 
 import logger from "../config/logger.js";
-import mempoolCache from "./MempoolCache.js";
+import cache from "./Cache.js";
 
 dotenv.config();
 
@@ -115,23 +115,17 @@ class GeneralRpcAggregator {
   async executeRpcCall(method, params) {
     switch (method) {
       case 'getBlockchainInfo':
-        return await mempoolCache.getCachedOrFetch('getBlockchainInfo', params);
+        return await cache.getCachedOrFetch('getBlockchainInfo', params);
       case 'getMiningInfo':
-        return await mempoolCache.getCachedOrFetch('getMiningInfo', params);
+        return await cache.getCachedOrFetch('getMiningInfo', params);
       case 'getChainTxStats':
-        return await mempoolCache.getCachedOrFetch('getChainTxStats', params);
+        return await cache.getCachedOrFetch('getChainTxStats', params);
       case 'getMempoolInfo':
-        return await mempoolCache.getCachedOrFetch('getMempoolInfo', params);
+        return await cache.getCachedOrFetch('getMempoolInfo', params);
       case 'getRawMempool':
-        return await mempoolCache.getCachedOrFetch('getRawMempool', params);
+        return await cache.getCachedOrFetch('getRawMempool', params);
       case 'getNetworkInfo':
-        return await mempoolCache.getCachedOrFetch('getNetworkInfo', params);
-      case 'getNetTotals':
-        return await mempoolCache.getCachedOrFetch('getNetTotals', params);
-      case 'getUptimeSeconds':
-        return await mempoolCache.getCachedOrFetch('getUptimeSeconds', params);
-      case 'getPeerInfo':
-        return await mempoolCache.getCachedOrFetch('getPeerInfo', params);
+        return await cache.getCachedOrFetch('getNetworkInfo', params);
       default:
         throw new Error(`Unsupported RPC method: ${method}`);
     }
@@ -140,7 +134,7 @@ class GeneralRpcAggregator {
   async shutdown() {
     logger.info('GeneralRpcAggregator: Starting shutdown...');
 
-    mempoolCache.shutdown();
+    cache.shutdown();
 
     for (const timer of this.batchTimers.values()) {
       clearTimeout(timer);
