@@ -8,7 +8,7 @@ dotenv.config();
 const redisConfig = {
   host: process.env.REDIS_HOST || 'localhost',
   port: parseInt(process.env.REDIS_PORT) || 6379,
-  password: process.env.REDIS_PASSWORD || '4e129bd6ad204840a829d00d1b4fcb8e',
+  password: process.env.REDIS_PASSWORD || '',
   retryDelayOnFailover: 100,
   enableReadyCheck: false,
   maxRetriesPerRequest: null,

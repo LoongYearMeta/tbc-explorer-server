@@ -12,8 +12,8 @@ const servicesConfig = {
     path: process.env.NODE_RPC_PATH || "",
     timeout: parseInt(process.env.NODE_RPC_TIMEOUT) || 10000,
     retries: parseInt(process.env.NODE_RPC_RETRIES) || 3,
-    username: process.env.NODE_RPC_USERNAME || "tbcuser",
-    password: process.env.NODE_RPC_PASSWORD || "randompasswd",
+    username: process.env.NODE_RPC_USERNAME || "",
+    password: process.env.NODE_RPC_PASSWORD || "",
     get url() {
       return `http://${this.host}:${this.port}${this.path}`;
     },
@@ -23,7 +23,7 @@ const servicesConfig = {
     type: "json-rpc",
     protocol: "tcp",
     host: process.env.ELECTRUMX_RPC_HOST || "localhost",
-    port: process.env.ELECTRUMX_RPC_PORT || 50002,
+    port: process.env.ELECTRUMX_RPC_PORT || 50001,
     path: process.env.ELECTRUMX_RPC_PATH || "",
     timeout: parseInt(process.env.ELECTRUMX_RPC_TIMEOUT) || 10000,
     retries: parseInt(process.env.ELECTRUMX_RPC_RETRIES) || 3,
