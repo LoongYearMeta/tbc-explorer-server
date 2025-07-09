@@ -2,13 +2,14 @@ import express from "express";
 
 import generalRpcAggregator from "../services/GeneralRpcAggregator.js";
 import logger from "../config/logger.js";
+import { getRealClientIP } from "../lib/util.js";
 
 const router = express.Router();
 
 router.get("/", async (req, res, next) => {
   try {
-    logger.info("Chain status request", {
-      ip: req.ip,
+    logger.info("Chain info request", {
+      ip: getRealClientIP(req),
     });
 
     const [blockchainInfo, miningInfo] = await Promise.all([
@@ -37,7 +38,7 @@ router.get("/txstats/:blockCount?", async (req, res, next) => {
 
     logger.info("Chain transaction stats request", {
       blockCount,
-      ip: req.ip,
+      ip: getRealClientIP(req),
     });
 
     const txStats = await generalRpcAggregator.callRpc('getChainTxStats', [blockCount]);

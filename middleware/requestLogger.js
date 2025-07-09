@@ -1,6 +1,7 @@
 import morgan from "morgan";
 
 import logger from "../config/logger.js";
+import { getRealClientIP } from "../lib/util.js";
 
 const morganFormat =
   ':remote-addr - :remote-user [:date[clf]] ":method :url HTTP/:http-version" :status :res[content-length] ":referrer" ":user-agent" - :response-time ms';
@@ -28,7 +29,7 @@ const errorLogger = (error, req, res, next) => {
   if (error.status !== 404) {
     logger.error(`${req.method} ${req.originalUrl} - ${error.message}`, {
       error: error.stack,
-      ip: req.ip,
+      ip: getRealClientIP(req),
       userAgent: req.get("User-Agent"),
     });
   }

@@ -5,6 +5,7 @@ import transactionAggregator from "../services/TransactionAggregator.js";
 import redisService from "../services/RedisService.js";
 import logger from "../config/logger.js";
 import { Transaction } from "../models/transaction.js";
+import { getRealClientIP } from "../lib/util.js";
 
 const router = express.Router();
 
@@ -20,7 +21,7 @@ router.get("/:txid", async (req, res, next) => {
 
     logger.info("Transaction request", {
       txid,
-      ip: req.ip,
+      ip: getRealClientIP(req),
     });
     
     const transaction = await transactionAggregator.getRawTransaction(txid);
@@ -52,7 +53,7 @@ router.get("/:txid/raw", async (req, res, next) => {
 
     logger.info("Raw transaction request", {
       txid,
-      ip: req.ip,
+      ip: getRealClientIP(req),
     });
 
     let rawTransaction = "";
@@ -124,7 +125,7 @@ router.post("/batch/raw", async (req, res, next) => {
 
     logger.info("Multiple raw transactions request", {
       count: txids.length,
-      ip: req.ip,
+      ip: getRealClientIP(req),
     });
 
     const redisTxMap = new Map();

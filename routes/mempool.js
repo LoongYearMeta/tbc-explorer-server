@@ -2,13 +2,14 @@ import express from "express";
 
 import generalRpcAggregator from "../services/GeneralRpcAggregator.js";
 import logger from "../config/logger.js";
+import { getRealClientIP } from "../lib/util.js";
 
 const router = express.Router();
 
 router.get("/info", async (req, res, next) => {
   try {
     logger.info("Mempool info request", {
-      ip: req.ip,
+      ip: getRealClientIP(req),
     });
 
     const mempoolInfo = await generalRpcAggregator.callRpc('getMempoolInfo');
@@ -23,8 +24,8 @@ router.get("/info", async (req, res, next) => {
 
 router.get("/", async (req, res, next) => {
   try {
-    logger.info("Raw mempool request", {
-      ip: req.ip,
+    logger.info("Mempool transaction IDs request", {
+      ip: getRealClientIP(req),
     });
 
     const rawMempool = await generalRpcAggregator.callRpc('getRawMempool');

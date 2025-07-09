@@ -2,6 +2,7 @@ import express from "express";
 
 import serviceManager from "../services/ServiceManager.js";
 import logger from "../config/logger.js";
+import { getRealClientIP } from "../lib/util.js";
 
 const router = express.Router();
 
@@ -11,7 +12,7 @@ router.get("/:address", async (req, res, next) => {
     
     logger.info("Comprehensive address info request", {
       address,
-      ip: req.ip,
+      ip: getRealClientIP(req),
     });
 
     const [balance, txInfo] = await Promise.all([

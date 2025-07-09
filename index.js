@@ -24,6 +24,7 @@ import transactionRoutes from "./routes/transaction.js";
 import chaininfoRoutes from "./routes/chaininfo.js";
 import mempoolRoutes from "./routes/mempool.js";
 import networkRoutes from "./routes/network.js";
+import { getRealClientIP } from "./lib/util.js";
 
 dotenv.config();
 
@@ -56,7 +57,7 @@ if (cluster.isPrimary) {
   setTimeout(() => {
     logger.info("Starting dedicated worker processes...");
     startWorkerProcesses();
-  }, 2000); 
+  }, 2000);
 
   process.on('SIGTERM', () => gracefulShutdownMaster('SIGTERM'));
   process.on('SIGINT', () => gracefulShutdownMaster('SIGINT'));
@@ -68,6 +69,8 @@ if (cluster.isPrimary) {
 
 async function startHttpServer() {
   const app = express();
+
+  app.set('trust proxy', true);
   app.use(requestLogger);
   app.use(express.json());
 
@@ -101,7 +104,7 @@ async function startHttpServer() {
 
     logger.info("Health check request", {
       worker: process.pid,
-      ip: req.ip,
+      ip: getRealClientIP(req),
       serviceStatus: serviceStatus.initialized,
       dbStatus: dbStatus.connected,
       redisStatus: redisStatus.connected,
@@ -140,7 +143,7 @@ async function startHttpServer() {
         worker: process.pid,
         url: req.originalUrl,
         method: req.method,
-        ip: req.ip,
+        ip: getRealClientIP(req),
         userAgent: req.get("User-Agent"),
         stack: error.stack,
       });

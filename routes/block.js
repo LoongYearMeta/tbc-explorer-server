@@ -4,6 +4,7 @@ import serviceManager from "../services/ServiceManager.js";
 import redisService from "../services/RedisService.js";
 import logger from "../config/logger.js";
 import { Block } from "../models/block.js";
+import { getRealClientIP } from "../lib/util.js";
 
 const router = express.Router();
 
@@ -45,7 +46,7 @@ router.get("/height/:height", async (req, res, next) => {
 
     logger.info("Block by height request", {
       height,
-      ip: req.ip,
+      ip: getRealClientIP(req),
     });
 
     let block = null;
@@ -128,7 +129,7 @@ router.get("/hash/:hash", async (req, res, next) => {
 
     logger.info("Block by hash request", {
       hash,
-      ip: req.ip,
+      ip: getRealClientIP(req),
     });
 
     let block = null;
@@ -233,7 +234,7 @@ router.post("/heights", async (req, res, next) => {
 
     logger.info("Multiple blocks by heights request", {
       count: heights.length,
-      ip: req.ip,
+      ip: getRealClientIP(req),
     });
 
     const redisBlockMap = new Map();
@@ -367,7 +368,7 @@ router.post("/heights", async (req, res, next) => {
 router.get("/latest", async (req, res, next) => {
   try {
     logger.info("Latest 10 blocks request", {
-      ip: req.ip,
+      ip: getRealClientIP(req),
     });
     const blockchainInfo = await serviceManager.getBlockchainInfo();
     const currentHeight = blockchainInfo.blocks;
