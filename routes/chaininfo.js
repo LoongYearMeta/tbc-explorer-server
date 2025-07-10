@@ -1,6 +1,7 @@
 import express from "express";
 
 import generalRpcAggregator from "../services/GeneralRpcAggregator.js";
+import serviceManager from "../services/ServiceManager.js";
 import logger from "../config/logger.js";
 import { getRealClientIP } from "../lib/util.js";
 
@@ -41,12 +42,64 @@ router.get("/txstats/:blockCount?", async (req, res, next) => {
       ip: getRealClientIP(req),
     });
 
-    const txStats = await generalRpcAggregator.callRpc('getChainTxStats', [blockCount]);
+    if (blockCount !== undefined) {
+      const txStats = await serviceManager.getChainTxStats(blockCount);
+      
+      res.status(200).json({
+        txStats,
+        blockCount: blockCount
+      });
+    } else {
+      const timePeriods = [
+        { label: "1 day", blocks: 144 },      
+        { label: "7 days", blocks: 1008 },   
+        { label: "30 days", blocks: 4320 },   
+        { label: "365 days", blocks: 52560 }  
+      ];
 
-    res.status(200).json({
-      txStats,
-      blockCount: blockCount || "default"
-    });
+      const txStatsPromises = timePeriods.map(period => 
+        generalRpcAggregator.callRpc('getChainTxStats', [period.blocks])
+          .then(stats => ({
+            period: period.label,
+            blockCount: period.blocks,
+            stats: stats
+          }))
+          .catch(error => ({
+            period: period.label,
+            blockCount: period.blocks,
+            error: error.message
+          }))
+      );
+
+      const txStatsList = await Promise.all(txStatsPromises);
+
+      let time = null;
+      let txcount = null;
+      
+      const processedTxStatsList = txStatsList.map(item => {
+        if (item.stats && !item.error) {
+          if (time === null && txcount === null) {
+            time = item.stats.time;
+            txcount = item.stats.txcount;
+          }
+          
+          const { time: statsTime, txcount: statsTxcount, ...remainingStats } = item.stats;
+          
+          return {
+            period: item.period,
+            blockCount: item.blockCount,
+            stats: remainingStats
+          };
+        }
+        return item; 
+      });
+
+      res.status(200).json({
+        time,
+        txcount,
+        txStatsList: processedTxStatsList
+      });
+    }
   } catch (error) {
     next(error);
   }

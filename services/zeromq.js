@@ -460,7 +460,7 @@ class ZeroMQService {
     try {
       logger.debug(`[ZMQ] Updating Redis block cache for block ${blockDetails.height}`);
 
-      const maxRecentBlocks = 10;
+      const maxRecentBlocks = 11;
       const cacheKey = `blocks:recent:${blockDetails.height}`;
       await redisService.setJSON(cacheKey, blockDetails);
       await redisService.rpush('blocks:recent:queue', blockDetails.height);
@@ -500,13 +500,13 @@ class ZeroMQService {
         await redisService.exec('DEL', ...blockKeys);
         logger.info(`[ZMQ] Cleared ${blockKeys.length} recent blocks cache entries`);
       }
-      
+
       const queueExists = await redisService.exists(`blocks:recent:queue`);
       if (queueExists) {
         await redisService.del(`blocks:recent:queue`);
         logger.info(`[ZMQ] Cleared blocks recent queue`);
       }
-      
+
       logger.info('[ZMQ] Redis cache cleared successfully');
     } catch (error) {
       logger.error('[ZMQ] Error clearing Redis cache on startup', {
@@ -524,7 +524,7 @@ class ZeroMQService {
       const cachedKeys = await redisService.exec('KEYS', pattern);
       const cachedTxIds = cachedKeys.map(key => {
         const parts = key.split(':');
-        return parts[parts.length - 1]; 
+        return parts[parts.length - 1];
       });
 
       let filteredMempoolTxIds = currentMempoolTxIds;
@@ -616,7 +616,7 @@ class ZeroMQService {
         const currentMempoolTxIds = await this.serviceManager.getRawMempool();
         const blockTxSet = new Set(blockTxIds);
         const stillInMempool = currentMempoolTxIds.filter(txid => blockTxSet.has(txid));
-        
+
         if (stillInMempool.length > 0 && attempt < maxAttempts) {
           logger.debug(`[ZMQ] ${stillInMempool.length} block transactions still in mempool, will retry in ${(attempt + 1) * 2}s`);
           this.scheduleUpdateMempoolCache(blockTxIds, blockHeight, attempt + 1, maxAttempts);
@@ -629,13 +629,13 @@ class ZeroMQService {
 
         await this.updateRedisMempoolCache(blockTxIds);
         logger.debug(`[ZMQ] Successfully updated mempool cache for block ${blockHeight} on attempt ${attempt}`);
-        
+
       } catch (error) {
         logger.error(`[ZMQ] Error in mempool cache update attempt ${attempt} for block ${blockHeight}`, {
           error: error.message,
           stack: error.stack
         });
-        
+
         if (attempt < maxAttempts) {
           logger.debug(`[ZMQ] Will retry mempool cache update for block ${blockHeight}`);
           this.scheduleUpdateMempoolCache(blockTxIds, blockHeight, attempt + 1, maxAttempts);

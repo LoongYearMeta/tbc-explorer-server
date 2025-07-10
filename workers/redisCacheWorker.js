@@ -11,7 +11,7 @@ dotenv.config();
 
 class RedisCacheWorker {
     constructor() {
-        this.maxRecentBlocks = 10;
+        this.maxRecentBlocks = 11;
     }
 
     async initialize() {

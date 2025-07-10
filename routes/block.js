@@ -367,12 +367,12 @@ router.post("/heights", async (req, res, next) => {
 
 router.get("/latest", async (req, res, next) => {
   try {
-    logger.info("Latest 10 blocks request", {
+    logger.info("Latest 11 blocks request", {
       ip: getRealClientIP(req),
     });
     const blockchainInfo = await serviceManager.getBlockchainInfo();
     const currentHeight = blockchainInfo.blocks;
-    const startHeight = Math.max(0, currentHeight - 9);
+    const startHeight = Math.max(0, currentHeight - 10);
     const heights = [];
     for (let i = currentHeight; i >= startHeight; i--) {
       heights.push(i);
