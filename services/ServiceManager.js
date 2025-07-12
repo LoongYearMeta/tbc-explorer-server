@@ -1,6 +1,4 @@
 import axios from "axios";
-import crypto from "crypto";
-import bitcoin from "bitcoinjs-lib";
 import net from "net";
 import dotenv from "dotenv";
 
@@ -11,6 +9,7 @@ import { coinConfig } from "../lib/coin.js";
 import {
   getBlockTotalFeesFromCoinbaseTxAndBlockHeight,
   getMinerFromCoinbaseTx,
+  addressToScriptHash
 } from "../lib/util.js";
 
 dotenv.config();
@@ -19,6 +18,7 @@ class ServiceManager {
   constructor() {
     this.rpcClients = {};
     this.initialized = false;
+    this.activeTcpConnections = new Set(); 
 
     this.performanceConfig = {
       defaultBatchSize: parseInt(process.env.BATCH_SIZE) || 100,
@@ -44,6 +44,10 @@ class ServiceManager {
       maxDelayMs: parseInt(process.env.BATCH_RETRY_MAX_DELAY) || 5000,
       enableIndividualRetry: process.env.BATCH_RETRY_ENABLE !== 'false'
     };
+
+    this.connectionCleanupInterval = setInterval(() => {
+      this.cleanupStaleConnections();
+    }, 30000); 
   }
 
   async initialize() {
@@ -223,6 +227,15 @@ class ServiceManager {
   async callTcpRpc(host, port, method, params, timeout = 10000) {
     return new Promise((resolve, reject) => {
       const client = new net.Socket();
+      const connectionId = `${host}:${port}:${Date.now()}:${Math.random()}`;
+      
+      this.activeTcpConnections.add({
+        socket: client,
+        connectionId,
+        createdAt: Date.now(),
+        host,
+        port
+      });
 
       const payload = {
         jsonrpc: "2.0",
@@ -233,15 +246,35 @@ class ServiceManager {
 
       const message = JSON.stringify(payload) + '\n';
       let responseData = '';
+      let isResolved = false;
 
       client.setTimeout(timeout);
+
+      const cleanup = () => {
+        if (!isResolved) {
+          isResolved = true;
+          this.activeTcpConnections.forEach(conn => {
+            if (conn.connectionId === connectionId) {
+              this.activeTcpConnections.delete(conn);
+            }
+          });
+          
+          try {
+            if (!client.destroyed) {
+              client.destroy();
+            }
+          } catch (error) {
+            logger.debug('Error destroying TCP client', { error: error.message });
+          }
+        }
+      };
 
       client.on('data', (data) => {
         responseData += data.toString();
         if (responseData.includes('\n')) {
           try {
             const response = JSON.parse(responseData.trim());
-            client.destroy();
+            cleanup();
 
             if (response.error) {
               reject(new Error(`RPC Error: ${response.error.message} (Code: ${response.error.code})`));
@@ -249,26 +282,59 @@ class ServiceManager {
               resolve(response.result);
             }
           } catch (error) {
-            client.destroy();
+            cleanup();
             reject(new Error(`Failed to parse response: ${error.message}`));
           }
         }
       });
 
       client.on('error', (error) => {
-        client.destroy();
+        cleanup();
         reject(error);
       });
 
       client.on('timeout', () => {
-        client.destroy();
+        cleanup();
         reject(new Error('TCP connection timeout'));
       });
 
-      client.connect(port, host, () => {
-        client.write(message);
+      client.on('close', () => {
+        cleanup();
       });
+
+      try {
+        client.connect(port, host, () => {
+          client.write(message);
+        });
+      } catch (error) {
+        cleanup();
+        reject(error);
+      }
     });
+  }
+
+  cleanupStaleConnections() {
+    const now = Date.now();
+    const maxAge = 60000; 
+    let cleanedCount = 0;
+
+    this.activeTcpConnections.forEach(conn => {
+      if (now - conn.createdAt > maxAge) {
+        try {
+          if (!conn.socket.destroyed) {
+            conn.socket.destroy();
+            cleanedCount++;
+          }
+        } catch (error) {
+          logger.debug('Error cleaning up stale TCP connection', { error: error.message });
+        }
+        this.activeTcpConnections.delete(conn);
+      }
+    });
+
+    if (cleanedCount > 0) {
+      logger.debug(`Cleaned up ${cleanedCount} stale TCP connections`);
+    }
   }
 
   async callRpcMethod(serviceName, method, params = []) {
@@ -897,15 +963,9 @@ class ServiceManager {
     return await this.executeBatch(batch, retryOptions);
   }
 
-  addressToScriptHash(address) {
-    const script = bitcoin.payments.p2pkh({ address }).output;
-    const hash = crypto.createHash('sha256').update(script).digest();
-    return hash.reverse().toString('hex');
-  }
-
   async getAddressBalance(address) {
     try {
-      const scriptHash = this.addressToScriptHash(address);
+      const scriptHash = addressToScriptHash(address);
       const result = await this.callRpcMethod("electrumx-rpc", "blockchain.scripthash.get_balance", [scriptHash]);
       return {
         ...result,
@@ -922,24 +982,88 @@ class ServiceManager {
 
   async getAddressTransactionIds(address) {
     try {
-      const scriptHash = this.addressToScriptHash(address);
+      const scriptHash = addressToScriptHash(address);
       const history = await this.callRpcMethod("electrumx-rpc", "blockchain.scripthash.get_history", [scriptHash]);
+
       if (!history || !Array.isArray(history)) {
         return {
           address,
-          txIds: [],
+          scriptHash,
+          transactions: [],
           totalTransactions: 0
         };
       }
-      const txIds = history.map(item => item.tx_hash);
+
+      const sortedHistory = history.map(item => ({
+        tx_hash: item.tx_hash,
+        height: item.height
+      })).sort((a, b) => {
+        if (a.height === 0 && b.height !== 0) return -1;
+        if (a.height !== 0 && b.height === 0) return 1;
+
+        if (a.height === 0 && b.height === 0) {
+          return b.tx_hash.localeCompare(a.tx_hash);
+        }
+
+        if (b.height !== a.height) {
+          return b.height - a.height;
+        }
+
+        return b.tx_hash.localeCompare(a.tx_hash);
+      });
+
       return {
         address,
         scriptHash,
-        txIds,
-        totalTransactions: txIds.length
+        transactions: sortedHistory,
+        totalTransactions: sortedHistory.length
       };
     } catch (error) {
       logger.error("Error getting address transaction IDs", {
+        address,
+        error: error.message
+      });
+      throw error;
+    }
+  }
+
+  async validateAddress(address) {
+    try {
+      const result = await this.callRpcMethod("node-rpc", "validateaddress", [address]);
+      return {
+        address,
+        ...result
+      };
+    } catch (error) {
+      logger.error("Error validating address", {
+        address,
+        error: error.message
+      });
+      throw error;
+    }
+  }
+
+  async getAddressDetails(address) {
+    try {
+      const [validation, balance, transactionInfo] = await Promise.all([
+        this.validateAddress(address),
+        this.getAddressBalance(address),
+        this.getAddressTransactionIds(address)
+      ]);
+
+      return {
+        address,
+        validation,
+        balance: {
+          confirmed: balance.confirmed || 0,
+          unconfirmed: balance.unconfirmed || 0
+        },
+        transactions: transactionInfo.transactions,
+        totalTransactions: transactionInfo.totalTransactions,
+        scriptHash: transactionInfo.scriptHash
+      };
+    } catch (error) {
+      logger.error("Error getting address details", {
         address,
         error: error.message
       });
@@ -967,6 +1091,43 @@ class ServiceManager {
     logger.info('ServiceManager: Starting shutdown process...');
 
     try {
+      if (this.connectionCleanupInterval) {
+        clearInterval(this.connectionCleanupInterval);
+        this.connectionCleanupInterval = null;
+      }
+
+      logger.info(`ServiceManager: Closing ${this.activeTcpConnections.size} active TCP connections`);
+      this.activeTcpConnections.forEach(conn => {
+        try {
+          if (!conn.socket.destroyed) {
+            conn.socket.destroy();
+          }
+        } catch (error) {
+          logger.debug('Error closing TCP connection during shutdown', { error: error.message });
+        }
+      });
+      this.activeTcpConnections.clear();
+
+      for (const [serviceName, serviceData] of Object.entries(this.rpcClients)) {
+        try {
+          const { client, config } = serviceData;
+          
+          if (config.type === "json-rpc" && config.protocol !== "tcp") {
+            if (client && typeof client.defaults === 'object') {
+              if (client.defaults.timeout) {
+                client.defaults.timeout = 100; 
+              }
+            }
+          }
+          
+          logger.debug(`ServiceManager: Cleaned up service client: ${serviceName}`);
+        } catch (error) {
+          logger.warn(`ServiceManager: Error cleaning up service client ${serviceName}`, {
+            error: error.message
+          });
+        }
+      }
+
       this.rpcClients = {};
       this.initialized = false;
 

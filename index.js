@@ -10,7 +10,7 @@ import os from "os";
 
 import logger from "./config/logger.js";
 import { connectDB, disconnectDB } from "./config/db.js";
-import { connectRedis, disconnectRedis, redis } from "./config/redis.js";
+import { connectRedis, disconnectRedis, redis, getRedisStats } from "./config/redis.js";
 import {
   requestLogger,
   errorLogger,
@@ -74,7 +74,34 @@ async function startHttpServer() {
   app.use(requestLogger);
   app.use(express.json());
 
-  app.get("/health", (req, res) => {
+  async function getMongoPoolStats(type) {
+    try {
+      if (mongoose.connection.readyState !== 1) {
+        return 'disconnected';
+      }
+
+      const db = mongoose.connection.db;
+      if (!db) {
+        return 'no-db';
+      }
+
+      const serverStatus = await db.admin().serverStatus();
+      const connections = serverStatus.connections;
+      
+      if (type === 'current') {
+        return connections.current || 0;
+      } else if (type === 'available') {
+        return connections.available || 0;
+      }
+      
+      return 'unknown';
+    } catch (error) {
+      logger.debug('Failed to get MongoDB pool stats', { error: error.message });
+      return 'error';
+    }
+  }
+
+  app.get("/health", async (req, res) => {
     const serviceStatus = serviceManager.getServiceStatus();
     const dbConnectionStates = {
       0: 'disconnected',
@@ -89,18 +116,58 @@ async function startHttpServer() {
       connected: dbState === 1,
       host: mongoose.connection.host,
       name: mongoose.connection.name,
-      readyState: dbState
+      readyState: dbState,
+      poolInfo: {
+        maxPoolSize: parseInt(process.env.MONGO_MAX_POOL_SIZE) || 1500,
+        minPoolSize: parseInt(process.env.MONGO_MIN_POOL_SIZE) || 50,
+        maxIdleTimeMS: parseInt(process.env.MONGO_MAX_IDLE_TIME) || 30000,
+        serverSelectionTimeoutMS: parseInt(process.env.MONGO_SERVER_SELECTION_TIMEOUT) || 5000,
+        heartbeatFrequencyMS: parseInt(process.env.MONGO_HEARTBEAT_FREQUENCY) || 10000,
+        currentConnections: await getMongoPoolStats('current'),
+        availableConnections: await getMongoPoolStats('available')
+      }
     };
 
+    const redisStats = getRedisStats();
     const redisStatus = {
       connected: redis.status === 'ready',
       state: redis.status,
       host: redis.options.host,
       port: redis.options.port,
-      keyPrefix: redis.options.keyPrefix
+      keyPrefix: redis.options.keyPrefix,
+      stats: redisStats,
+      healthy: redisStats.status === 'ready' && redisStats.errors < 10
     };
 
-    const overallHealthy = serviceStatus.initialized && dbStatus.connected && redisStatus.connected;
+    const memoryUsage = process.memoryUsage();
+    const systemInfo = {
+      pid: process.pid,
+      uptime: process.uptime(),
+      nodeVersion: process.version,
+      memory: {
+        rss: Math.round(memoryUsage.rss / 1024 / 1024) + 'MB',
+        heapTotal: Math.round(memoryUsage.heapTotal / 1024 / 1024) + 'MB',
+        heapUsed: Math.round(memoryUsage.heapUsed / 1024 / 1024) + 'MB',
+        external: Math.round(memoryUsage.external / 1024 / 1024) + 'MB'
+      },
+      cpuUsage: process.cpuUsage()
+    };
+
+    const overallHealthy = serviceStatus.initialized && 
+                          dbStatus.connected && 
+                          redisStatus.connected &&
+                          redisStatus.healthy;
+
+    const healthScore = {
+      database: dbStatus.connected ? 100 : 0,
+      redis: redisStatus.healthy ? 100 : Math.max(0, 100 - redisStats.errors * 10),
+      services: serviceStatus.initialized ? 100 : 0,
+      overall: overallHealthy ? 100 : Math.min(
+        (dbStatus.connected ? 33 : 0) + 
+        (redisStatus.healthy ? 33 : 0) + 
+        (serviceStatus.initialized ? 34 : 0)
+      )
+    };
 
     logger.info("Health check request", {
       worker: process.pid,
@@ -108,7 +175,8 @@ async function startHttpServer() {
       serviceStatus: serviceStatus.initialized,
       dbStatus: dbStatus.connected,
       redisStatus: redisStatus.connected,
-      overallHealthy
+      overallHealthy,
+      healthScore: healthScore.overall
     });
 
     res.status(overallHealthy ? 200 : 503).json({
@@ -116,9 +184,18 @@ async function startHttpServer() {
       healthy: overallHealthy,
       worker: process.pid,
       timestamp: new Date().toISOString(),
+      healthScore,
       services: serviceStatus,
       database: dbStatus,
       redis: redisStatus,
+      system: systemInfo,
+      warnings: [
+        ...(redisStats.errors > 10 ? [`High Redis error count: ${redisStats.errors}`] : []),
+        ...(memoryUsage.heapUsed > memoryUsage.heapTotal * 0.95 ? ['Critical memory usage'] : []),
+        ...(memoryUsage.rss > 1024 * 1024 * 1024 ? ['High RSS memory usage (>1GB)'] : []), 
+        ...(dbState !== 1 ? ['Database not connected'] : []),
+        ...(redis.status !== 'ready' ? ['Redis not ready'] : [])
+      ]
     });
   });
 

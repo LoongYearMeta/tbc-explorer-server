@@ -9,62 +9,236 @@ const redisConfig = {
   host: process.env.REDIS_HOST || 'localhost',
   port: parseInt(process.env.REDIS_PORT) || 6379,
   password: process.env.REDIS_PASSWORD || '',
-  retryDelayOnFailover: 100,
-  enableReadyCheck: false,
-  maxRetriesPerRequest: null,
-  family: 4,
+  db: parseInt(process.env.REDIS_DB) || 0,
   keyPrefix: process.env.REDIS_KEY_PREFIX || 'tbc-explorer:',
+  
   lazyConnect: true,
-  keepAlive: 30000,
   connectTimeout: 10000,
   commandTimeout: 5000,
-  retryCount: 3,
-  retryDelayOnClusterDown: 300,
+  keepAlive: 30000,
+  family: 4,
+  
   retryDelayOnFailover: 100,
+  maxRetriesPerRequest: 3,
   enableOfflineQueue: false,
-  readOnly: false,
+  
+  enableReadyCheck: false,
   showFriendlyErrorStack: true,
+  autoResubscribe: true,
+  autoResendUnfulfilledCommands: true,
 };
 
-const redis = new Redis(redisConfig);
+const POOL_SIZE = parseInt(process.env.REDIS_POOL_SIZE) || 200; 
+let connectionPool = [];
+let poolIndex = 0;
 
-redis.on('connect', () => {
-  logger.info('Redis connection established');
-});
+let connectionStats = {
+  connects: 0,
+  disconnects: 0,
+  errors: 0,
+  lastConnectTime: null,
+  lastDisconnectTime: null,
+  lastErrorTime: null,
+  poolSize: POOL_SIZE,
+  activeConnections: 0
+};
 
-redis.on('ready', () => {
-  logger.info('Redis connection ready');
-});
+const createRedisPool = () => {
+  logger.debug('Creating Redis connection pool', { poolSize: POOL_SIZE });
+  
+  for (let i = 0; i < POOL_SIZE; i++) {
+    const redis = new Redis(redisConfig);
+    redis.on('connect', () => {
+      connectionStats.connects++;
+      connectionStats.activeConnections++;
+      connectionStats.lastConnectTime = new Date().toISOString();
+      if (i === 0 || i === POOL_SIZE - 1) {
+        logger.debug(`Redis connection ${i} established`, {
+          poolIndex: i,
+          connects: connectionStats.connects,
+          poolSize: POOL_SIZE
+        });
+      }
+    });
 
-redis.on('error', (err) => {
-  logger.error('Redis connection error', {
-    error: err.message,
-    stack: err.stack,
+    redis.on('ready', () => {
+      if (i === 0 || i === POOL_SIZE - 1) {
+        logger.debug(`Redis connection ${i} ready`, {
+          poolIndex: i,
+          status: redis.status
+        });
+      }
+    });
+
+    redis.on('error', (err) => {
+      connectionStats.errors++;
+      connectionStats.lastErrorTime = new Date().toISOString();
+      logger.error(`Redis connection ${i} error`, {
+        error: err.message,
+        totalErrors: connectionStats.errors
+      });
+    });
+
+    redis.on('close', () => {
+      connectionStats.disconnects++;
+      connectionStats.activeConnections = Math.max(0, connectionStats.activeConnections - 1);
+      connectionStats.lastDisconnectTime = new Date().toISOString();
+    });
+
+    connectionPool.push(redis);
+  }
+  
+  logger.info('Redis connection pool created', { 
+    poolSize: POOL_SIZE,
+    totalConnections: connectionPool.length 
   });
-});
+};
 
-redis.on('close', () => {
-  logger.warn('Redis connection closed');
-});
+const getRedisConnection = () => {
+  if (connectionPool.length === 0) {
+    throw new Error('Redis connection pool not initialized');
+  }
+  
+  const connection = connectionPool[poolIndex];
+  poolIndex = (poolIndex + 1) % connectionPool.length;
+  
+  return connection;
+};
 
-redis.on('reconnecting', () => {
-  logger.info('Redis reconnecting...');
-});
+const redis = {
+  get: (...args) => getRedisConnection().get(...args),
+  set: (...args) => getRedisConnection().set(...args),
+  del: (...args) => getRedisConnection().del(...args),
+  exists: (...args) => getRedisConnection().exists(...args),
+  expire: (...args) => getRedisConnection().expire(...args),
+  ttl: (...args) => getRedisConnection().ttl(...args),
+  incr: (...args) => getRedisConnection().incr(...args),
+  decr: (...args) => getRedisConnection().decr(...args),
+  lpush: (...args) => getRedisConnection().lpush(...args),
+  rpush: (...args) => getRedisConnection().rpush(...args),
+  lpop: (...args) => getRedisConnection().lpop(...args),
+  rpop: (...args) => getRedisConnection().rpop(...args),
+  llen: (...args) => getRedisConnection().llen(...args),
+  lrange: (...args) => getRedisConnection().lrange(...args),
+  ltrim: (...args) => getRedisConnection().ltrim(...args),
+  lindex: (...args) => getRedisConnection().lindex(...args),
+  lset: (...args) => getRedisConnection().lset(...args),
+  lrem: (...args) => getRedisConnection().lrem(...args),
+  hget: (...args) => getRedisConnection().hget(...args),
+  hset: (...args) => getRedisConnection().hset(...args),
+  hdel: (...args) => getRedisConnection().hdel(...args),
+  hgetall: (...args) => getRedisConnection().hgetall(...args),
+  hkeys: (...args) => getRedisConnection().hkeys(...args),
+  hvals: (...args) => getRedisConnection().hvals(...args),
+  hexists: (...args) => getRedisConnection().hexists(...args),
+  hlen: (...args) => getRedisConnection().hlen(...args),
+  sadd: (...args) => getRedisConnection().sadd(...args),
+  smembers: (...args) => getRedisConnection().smembers(...args),
+  srem: (...args) => getRedisConnection().srem(...args),
+  scard: (...args) => getRedisConnection().scard(...args),
+  sismember: (...args) => getRedisConnection().sismember(...args),
+  zadd: (...args) => getRedisConnection().zadd(...args),
+  zrange: (...args) => getRedisConnection().zrange(...args),
+  zrem: (...args) => getRedisConnection().zrem(...args),
+  zcard: (...args) => getRedisConnection().zcard(...args),
+  zscore: (...args) => getRedisConnection().zscore(...args),
+  zcount: (...args) => getRedisConnection().zcount(...args),
+  info: (...args) => getRedisConnection().info(...args),
+  client: (...args) => getRedisConnection().client(...args),
+  flushdb: (...args) => getRedisConnection().flushdb(...args),
+  keys: (...args) => getRedisConnection().keys(...args),
+  call: (...args) => getRedisConnection().call(...args),
+  ping: (...args) => getRedisConnection().ping(...args),
+  
+  get status() {
+    return connectionPool.length > 0 ? connectionPool[0].status : 'disconnected';
+  },
+  
+  get options() {
+    return connectionPool.length > 0 ? connectionPool[0].options : {};
+  }
+};
 
-redis.on('end', () => {
-  logger.warn('Redis connection ended');
-});
+let monitoringInterval = null;
+
+const startMonitoring = () => {
+  if (monitoringInterval) {
+    clearInterval(monitoringInterval);
+  }
+  
+  monitoringInterval = setInterval(async () => {
+    try {
+      if (connectionPool.length > 0 && connectionPool[0].status === 'ready') {
+        const info = await connectionPool[0].info('memory');
+        const memoryInfo = {};
+        
+        info.split('\n').forEach(line => {
+          if (line.includes(':')) {
+            const [key, value] = line.split(':');
+            if (key.includes('memory') || key.includes('clients')) {
+              memoryInfo[key.trim()] = value.trim();
+            }
+          }
+        });
+        
+        const clientList = await connectionPool[0].client('list');
+        const clientCount = clientList.split('\n').filter(line => line.trim()).length;
+        
+        const errorRate = connectionStats.errors / Math.max(connectionStats.connects, 1);
+        const hasWarning = clientCount > 500 || errorRate > 0.1;
+        
+        if (hasWarning) {
+          logger.info('Redis pool health check', {
+            poolSize: connectionPool.length,
+            activeConnections: connectionStats.activeConnections,
+            clientConnections: clientCount,
+            memoryUsed: memoryInfo.used_memory_human,
+            memoryPeak: memoryInfo.used_memory_peak_human,
+            connectedClients: memoryInfo.connected_clients,
+            stats: connectionStats
+          });
+        }
+        
+        const warningThreshold = Math.max(2000, POOL_SIZE * 10);
+        if (clientCount > warningThreshold) {
+          logger.warn('High Redis client connection count', {
+            clientCount,
+            threshold: warningThreshold,
+            poolSize: connectionPool.length
+          });
+        }
+        
+        if (errorRate > 0.1) {
+          logger.warn('High Redis error rate', {
+            errorRate: (errorRate * 100).toFixed(2) + '%',
+            errors: connectionStats.errors,
+            connects: connectionStats.connects
+          });
+        }
+      }
+    } catch (error) {
+      logger.debug('Redis monitoring failed', { error: error.message });
+    }
+  }, parseInt(process.env.REDIS_MONITOR_INTERVAL) || 300000); 
+};
 
 const connectRedis = async () => {
   try {
-    await redis.connect();
-    logger.info('Redis connected successfully', {
+    createRedisPool();
+    const connectPromises = connectionPool.map(redis => redis.connect());
+    await Promise.all(connectPromises);
+    
+    startMonitoring();
+    
+    logger.info('Redis connection pool connected successfully', {
       host: redisConfig.host,
       port: redisConfig.port,
       keyPrefix: redisConfig.keyPrefix,
+      poolSize: connectionPool.length,
+      status: connectionPool[0].status
     });
   } catch (error) {
-    logger.error('Redis connection failed', {
+    logger.error('Redis connection pool failed', {
       error: error.message,
       stack: error.stack,
     });
@@ -74,14 +248,44 @@ const connectRedis = async () => {
 
 const disconnectRedis = async () => {
   try {
-    redis.disconnect();
-    logger.info('Redis disconnected successfully');
+    if (monitoringInterval) {
+      clearInterval(monitoringInterval);
+      monitoringInterval = null;
+    }
+    
+    logger.info('Redis connection pool disconnecting', {
+      finalStats: connectionStats,
+      poolSize: connectionPool.length
+    });
+    
+    const disconnectPromises = connectionPool.map((redis, index) => {
+      logger.debug(`Disconnecting Redis connection ${index}`);
+      return redis.disconnect();
+    });
+    
+    await Promise.all(disconnectPromises);
+    connectionPool = [];
+    poolIndex = 0;
+    
+    logger.info('Redis connection pool disconnected successfully');
   } catch (error) {
-    logger.error('Redis disconnect failed', {
+    logger.error('Redis connection pool disconnect failed', {
       error: error.message,
       stack: error.stack,
     });
   }
 };
 
-export { redis, connectRedis, disconnectRedis };
+const getRedisStats = () => ({
+  ...connectionStats,
+  status: redis.status,
+  poolSize: connectionPool.length,
+  config: {
+    host: redisConfig.host,
+    port: redisConfig.port,
+    keyPrefix: redisConfig.keyPrefix,
+    poolSize: POOL_SIZE
+  }
+});
+
+export { redis, connectRedis, disconnectRedis, getRedisStats };
