@@ -2,42 +2,53 @@ import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 
 import logger from '../config/logger.js';
+import { getConnectionConfig } from './connectionConfig.js';
 
 dotenv.config();
 
 const connectDB = async () => {
 	try {
+		const connectionConfig = getConnectionConfig();
+		const mongoConfig = connectionConfig.mongodb;
+
+		logger.info('MongoDB connecting with optimized pool configuration', {
+			processType: connectionConfig.processType,
+			maxPoolSize: mongoConfig.maxPoolSize,
+			minPoolSize: mongoConfig.minPoolSize,
+			workerId: connectionConfig.cluster.workerId
+		});
+
 		const db = await mongoose.connect(process.env.MONGO, {
-			maxPoolSize: parseInt(process.env.MONGO_MAX_POOL_SIZE) || 1500, 
-			minPoolSize: parseInt(process.env.MONGO_MIN_POOL_SIZE) || 50,   
-			maxIdleTimeMS: parseInt(process.env.MONGO_MAX_IDLE_TIME) || 30000, 
-			serverSelectionTimeoutMS: parseInt(process.env.MONGO_SERVER_SELECTION_TIMEOUT) || 5000,
-			heartbeatFrequencyMS: parseInt(process.env.MONGO_HEARTBEAT_FREQUENCY) || 10000,
+			maxPoolSize: mongoConfig.maxPoolSize,
+			minPoolSize: mongoConfig.minPoolSize,
+			maxIdleTimeMS: mongoConfig.maxIdleTimeMS,
+			serverSelectionTimeoutMS: mongoConfig.serverSelectionTimeoutMS,
+			heartbeatFrequencyMS: mongoConfig.heartbeatFrequencyMS,
 			retryWrites: true,
 			retryReads: true,
 		});
-		
+
 		mongoose.connection.on('connected', () => {
 			logger.info('MongoDB connected');
 		});
-		
+
 		mongoose.connection.on('error', (err) => {
 			logger.error('MongoDB connection error', { error: err.message });
 		});
-		
+
 		mongoose.connection.on('disconnected', () => {
 			logger.warn('MongoDB disconnected');
 		});
-		
+
 		setInterval(() => {
 			const connState = mongoose.connection.readyState;
 			const states = {
 				0: 'disconnected',
-				1: 'connected', 
+				1: 'connected',
 				2: 'connecting',
 				3: 'disconnecting'
 			};
-			
+
 			if (connState !== 1) {
 				logger.warn('MongoDB connection status', {
 					state: states[connState],
@@ -46,8 +57,8 @@ const connectDB = async () => {
 					readyState: connState
 				});
 			}
-		}, 300000); 
-		
+		}, 300000);
+
 		logger.info('MongoDB connected successfully', {
 			host: db.connection.host,
 			name: db.connection.name,

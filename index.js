@@ -25,6 +25,7 @@ import chaininfoRoutes from "./routes/chaininfo.js";
 import mempoolRoutes from "./routes/mempool.js";
 import networkRoutes from "./routes/network.js";
 import { getRealClientIP } from "./lib/util.js";
+import { generateConnectionReport } from "./config/connectionConfig.js";
 
 dotenv.config();
 
@@ -87,13 +88,13 @@ async function startHttpServer() {
 
       const serverStatus = await db.admin().serverStatus();
       const connections = serverStatus.connections;
-      
+
       if (type === 'current') {
         return connections.current || 0;
       } else if (type === 'available') {
         return connections.available || 0;
       }
-      
+
       return 'unknown';
     } catch (error) {
       logger.debug('Failed to get MongoDB pool stats', { error: error.message });
@@ -153,21 +154,23 @@ async function startHttpServer() {
       cpuUsage: process.cpuUsage()
     };
 
-    const overallHealthy = serviceStatus.initialized && 
-                          dbStatus.connected && 
-                          redisStatus.connected &&
-                          redisStatus.healthy;
+    const overallHealthy = serviceStatus.initialized &&
+      dbStatus.connected &&
+      redisStatus.connected &&
+      redisStatus.healthy;
 
     const healthScore = {
       database: dbStatus.connected ? 100 : 0,
       redis: redisStatus.healthy ? 100 : Math.max(0, 100 - redisStats.errors * 10),
       services: serviceStatus.initialized ? 100 : 0,
       overall: overallHealthy ? 100 : Math.min(
-        (dbStatus.connected ? 33 : 0) + 
-        (redisStatus.healthy ? 33 : 0) + 
+        (dbStatus.connected ? 33 : 0) +
+        (redisStatus.healthy ? 33 : 0) +
         (serviceStatus.initialized ? 34 : 0)
       )
     };
+
+    const connectionReport = generateConnectionReport();
 
     logger.info("Health check request", {
       worker: process.pid,
@@ -176,7 +179,9 @@ async function startHttpServer() {
       dbStatus: dbStatus.connected,
       redisStatus: redisStatus.connected,
       overallHealthy,
-      healthScore: healthScore.overall
+      healthScore: healthScore.overall,
+      processType: connectionReport.processInfo.type,
+      workerId: connectionReport.processInfo.workerId
     });
 
     res.status(overallHealthy ? 200 : 503).json({
@@ -189,12 +194,14 @@ async function startHttpServer() {
       database: dbStatus,
       redis: redisStatus,
       system: systemInfo,
+      connectionConfig: connectionReport,
       warnings: [
         ...(redisStats.errors > 10 ? [`High Redis error count: ${redisStats.errors}`] : []),
         ...(memoryUsage.heapUsed > memoryUsage.heapTotal * 0.95 ? ['Critical memory usage'] : []),
-        ...(memoryUsage.rss > 1024 * 1024 * 1024 ? ['High RSS memory usage (>1GB)'] : []), 
+        ...(memoryUsage.rss > 1024 * 1024 * 1024 ? ['High RSS memory usage (>1GB)'] : []),
         ...(dbState !== 1 ? ['Database not connected'] : []),
-        ...(redis.status !== 'ready' ? ['Redis not ready'] : [])
+        ...(redis.status !== 'ready' ? ['Redis not ready'] : []),
+        ...connectionReport.warnings
       ]
     });
   });
@@ -280,7 +287,7 @@ function startZeroMQWorker() {
   const zeromqWorkerPath = path.join(__dirname, 'workers', 'zeromqWorker.js');
   const zeromqWorkerProcess = spawn('node', [zeromqWorkerPath], {
     stdio: 'inherit',
-    env: process.env
+    env: { ...process.env, WORKER_TYPE: 'zeromq' }
   });
   process.zeromqWorkerProcess = zeromqWorkerProcess;
 
@@ -325,7 +332,7 @@ function startWorkerProcesses() {
   const blockWorkerPath = path.join(__dirname, 'workers', 'blockPreprocessorWorker.js');
   const blockWorkerProcess = spawn('node', [blockWorkerPath], {
     stdio: 'inherit',
-    env: process.env
+    env: { ...process.env, WORKER_TYPE: 'block' }
   });
 
   blockWorkerProcess.on('error', (error) => {
@@ -356,7 +363,7 @@ function startWorkerProcesses() {
   const cacheWorkerPath = path.join(__dirname, 'workers', 'redisCacheWorker.js');
   const cacheWorkerProcess = spawn('node', [cacheWorkerPath], {
     stdio: 'inherit',
-    env: process.env
+    env: { ...process.env, WORKER_TYPE: 'cache' }
   });
 
   cacheWorkerProcess.on('error', (error) => {

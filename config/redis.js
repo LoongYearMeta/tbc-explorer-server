@@ -2,6 +2,7 @@ import Redis from 'ioredis';
 import dotenv from 'dotenv';
 
 import logger from './logger.js';
+import { getConnectionConfig } from './connectionConfig.js';
 
 dotenv.config();
 
@@ -28,8 +29,8 @@ const redisConfig = {
   autoResendUnfulfilledCommands: true,
 };
 
-
-const POOL_SIZE = parseInt(process.env.REDIS_POOL_SIZE) || 20;
+const connectionConfig = getConnectionConfig();
+const POOL_SIZE = connectionConfig.redis.poolSize;
 let connectionPool = [];
 let poolIndex = 0;
 
@@ -45,7 +46,12 @@ let connectionStats = {
 };
 
 const createRedisPool = () => {
-  logger.debug('Creating Redis connection pool', { poolSize: POOL_SIZE });
+  logger.info('Creating Redis connection pool with optimized configuration', { 
+    poolSize: POOL_SIZE,
+    processType: connectionConfig.processType,
+    workerId: connectionConfig.cluster.workerId,
+    originalPoolSize: parseInt(process.env.REDIS_POOL_SIZE) || 20
+  });
 
   for (let i = 0; i < POOL_SIZE; i++) {
     const redis = new Redis(redisConfig);

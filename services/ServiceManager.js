@@ -11,6 +11,7 @@ import {
   getMinerFromCoinbaseTx,
   addressToScriptHash
 } from "../lib/util.js";
+import { getConnectionConfig } from "../config/connectionConfig.js";
 
 dotenv.config();
 
@@ -18,7 +19,26 @@ class ServiceManager {
   constructor() {
     this.rpcClients = {};
     this.initialized = false;
-    this.activeTcpConnections = new Set(); 
+    this.activeTcpConnections = new Set();
+
+    const connectionConfig = getConnectionConfig();
+    this.electrumxPool = {
+      connections: [],
+      maxConnections: connectionConfig.electrumx.maxConnections,
+      minConnections: connectionConfig.electrumx.minConnections,
+      currentIndex: 0,
+      host: null,
+      port: null,
+      expansionBatchSize: connectionConfig.electrumx.expansionBatchSize,
+      processType: connectionConfig.processType,
+      workerId: connectionConfig.cluster.workerId,
+      stats: {
+        totalRequests: 0,
+        poolHits: 0,
+        poolMisses: 0,
+        connectionErrors: 0
+      }
+    };
 
     this.performanceConfig = {
       defaultBatchSize: parseInt(process.env.BATCH_SIZE) || 100,
@@ -47,13 +67,280 @@ class ServiceManager {
 
     this.connectionCleanupInterval = setInterval(() => {
       this.cleanupStaleConnections();
-    }, 30000); 
+    }, 30000);
+  }
+
+  async createElectrumxConnection(host, port) {
+    return new Promise((resolve, reject) => {
+      const socket = new net.Socket();
+      socket.setKeepAlive(true, 30000);
+      socket.setTimeout(30000);
+
+      const connectionInfo = {
+        socket,
+        host,
+        port,
+        connected: false,
+        busy: false,
+        createdAt: Date.now(),
+        lastUsed: Date.now(),
+        requestQueue: []
+      };
+
+      socket.on('connect', () => {
+        connectionInfo.connected = true;
+        logger.debug(`ElectrumX connection established to ${host}:${port}`);
+        resolve(connectionInfo);
+      });
+
+      socket.on('error', (error) => {
+        connectionInfo.connected = false;
+        logger.error(`ElectrumX connection error: ${error.message}`);
+        reject(error);
+      });
+
+      socket.on('close', () => {
+        connectionInfo.connected = false;
+        logger.debug(`ElectrumX connection closed to ${host}:${port}`);
+      });
+
+      socket.connect(port, host);
+    });
+  }
+
+  async initializeElectrumxPool(host, port) {
+    this.electrumxPool.host = host;
+    this.electrumxPool.port = port;
+
+    logger.info(`Initializing ElectrumX connection pool to ${host}:${port} with optimized configuration`, {
+      processType: this.electrumxPool.processType,
+      workerId: this.electrumxPool.workerId,
+      minConnections: this.electrumxPool.minConnections,
+      maxConnections: this.electrumxPool.maxConnections,
+      expansionBatchSize: this.electrumxPool.expansionBatchSize,
+      originalMaxConnections: parseInt(process.env.ELECTRUMX_MAX_CONNECTIONS) || 140
+    });
+
+    const initialBatchSize = 20;
+    const maxIncrementalBatch = 10;
+    let targetConnections = Math.min(this.electrumxPool.minConnections, 130);
+
+    logger.info(`Creating connections gradually. Target: ${targetConnections} connections`);
+
+    logger.info(`Creating initial batch of ${initialBatchSize} connections`);
+    const initialPromises = [];
+    for (let i = 0; i < initialBatchSize; i++) {
+      initialPromises.push(this.createElectrumxConnection(host, port));
+    }
+
+    const initialResults = await Promise.allSettled(initialPromises);
+    let successCount = 0;
+    let failCount = 0;
+
+    initialResults.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        this.electrumxPool.connections.push(result.value);
+        successCount++;
+        logger.debug(`Created initial ElectrumX connection ${index + 1}/${initialBatchSize}`);
+      } else {
+        failCount++;
+        logger.error(`Failed to create initial ElectrumX connection ${index + 1}: ${result.reason.message}`);
+      }
+    });
+
+    logger.info(`Initial batch completed: ${successCount} success, ${failCount} failed. Total: ${this.electrumxPool.connections.length}`);
+
+    if (failCount > initialBatchSize * 0.3) {
+      targetConnections = Math.min(targetConnections, this.electrumxPool.connections.length + 50);
+      logger.warn(`High failure rate detected. Reducing target connections to ${targetConnections}`);
+    }
+
+    while (this.electrumxPool.connections.length < targetConnections) {
+      const remaining = targetConnections - this.electrumxPool.connections.length;
+      const currentBatchSize = Math.min(maxIncrementalBatch, remaining);
+
+      logger.info(`Creating incremental batch ${this.electrumxPool.connections.length + 1}-${this.electrumxPool.connections.length + currentBatchSize}`);
+
+      const batchPromises = [];
+      for (let i = 0; i < currentBatchSize; i++) {
+        batchPromises.push(this.createElectrumxConnection(host, port));
+      }
+
+      const batchResults = await Promise.allSettled(batchPromises);
+      let batchSuccessCount = 0;
+      let batchFailCount = 0;
+
+      batchResults.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          this.electrumxPool.connections.push(result.value);
+          batchSuccessCount++;
+        } else {
+          batchFailCount++;
+          logger.error(`Failed to create incremental connection: ${result.reason.message}`);
+        }
+      });
+
+      logger.info(`Incremental batch completed: ${batchSuccessCount} success, ${batchFailCount} failed. Total: ${this.electrumxPool.connections.length}/${targetConnections}`);
+
+      if (batchFailCount > currentBatchSize * 0.5) {
+        logger.warn(`High failure rate in incremental batch. Stopping at ${this.electrumxPool.connections.length} connections`);
+        break;
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    logger.info(`ElectrumX connection pool initialized with ${this.electrumxPool.connections.length}/${this.electrumxPool.minConnections} connections`);
+  }
+
+  async getAvailableElectrumxConnection() {
+    const availableConnections = this.electrumxPool.connections.filter(conn => conn.connected && !conn.busy);
+
+    if (availableConnections.length > 0) {
+      this.electrumxPool.currentIndex = (this.electrumxPool.currentIndex + 1) % availableConnections.length;
+      return availableConnections[this.electrumxPool.currentIndex];
+    }
+
+    if (this.electrumxPool.connections.length < this.electrumxPool.maxConnections) {
+      const remainingSlots = this.electrumxPool.maxConnections - this.electrumxPool.connections.length;
+      const batchSize = Math.min(this.electrumxPool.expansionBatchSize, remainingSlots);
+
+      logger.info(`Expanding ElectrumX connection pool: creating ${batchSize} new connections (${this.electrumxPool.connections.length}/${this.electrumxPool.maxConnections})`);
+
+      const connectionPromises = [];
+      for (let i = 0; i < batchSize; i++) {
+        connectionPromises.push(this.createElectrumxConnection(this.electrumxPool.host, this.electrumxPool.port));
+      }
+
+      try {
+        const results = await Promise.allSettled(connectionPromises);
+        const newConnections = [];
+
+        results.forEach((result, index) => {
+          if (result.status === 'fulfilled') {
+            this.electrumxPool.connections.push(result.value);
+            newConnections.push(result.value);
+            logger.debug(`Created additional ElectrumX connection ${index + 1}/${batchSize}`);
+          } else {
+            logger.error(`Failed to create additional ElectrumX connection ${index + 1}/${batchSize}: ${result.reason.message}`);
+            this.electrumxPool.stats.connectionErrors++;
+          }
+        });
+
+        logger.info(`Successfully expanded connection pool by ${newConnections.length} connections. Total: ${this.electrumxPool.connections.length}/${this.electrumxPool.maxConnections}`);
+
+        if (newConnections.length > 0) {
+          return newConnections[0];
+        }
+      } catch (error) {
+        logger.error(`Failed to expand ElectrumX connection pool: ${error.message}`);
+        this.electrumxPool.stats.connectionErrors++;
+      }
+    }
+
+    return null;
+  }
+
+  async callTcpRpcWithPool(host, port, method, params, timeout = 10000) {
+    this.electrumxPool.stats.totalRequests++;
+
+    const connection = await this.getAvailableElectrumxConnection();
+
+    if (!connection) {
+      logger.debug('No available pooled connection, creating new one');
+      this.electrumxPool.stats.poolMisses++;
+      return this.callTcpRpc(host, port, method, params, timeout);
+    }
+
+    this.electrumxPool.stats.poolHits++;
+
+    return new Promise((resolve, reject) => {
+      connection.busy = true;
+      connection.lastUsed = Date.now();
+
+      const payload = {
+        jsonrpc: "2.0",
+        method: method,
+        params: params,
+        id: generateRandomString(16),
+      };
+
+      const message = JSON.stringify(payload) + '\n';
+      let responseData = '';
+      let resolved = false;
+
+      const cleanup = () => {
+        connection.busy = false;
+        resolved = true;
+      };
+
+      const timeoutId = setTimeout(() => {
+        if (!resolved) {
+          cleanup();
+          reject(new Error('TCP connection timeout'));
+        }
+      }, timeout);
+
+      const dataHandler = (data) => {
+        responseData += data.toString();
+        if (responseData.includes('\n')) {
+          try {
+            const response = JSON.parse(responseData.trim());
+            clearTimeout(timeoutId);
+            cleanup();
+
+            connection.socket.removeListener('data', dataHandler);
+            connection.socket.removeListener('error', errorHandler);
+
+            if (response.error) {
+              reject(new Error(`RPC Error: ${response.error.message} (Code: ${response.error.code})`));
+            } else {
+              resolve(response.result);
+            }
+          } catch (error) {
+            clearTimeout(timeoutId);
+            cleanup();
+            connection.socket.removeListener('data', dataHandler);
+            connection.socket.removeListener('error', errorHandler);
+            reject(new Error(`Failed to parse response: ${error.message}`));
+          }
+        }
+      };
+
+      const errorHandler = (error) => {
+        clearTimeout(timeoutId);
+        cleanup();
+        connection.socket.removeListener('data', dataHandler);
+        connection.socket.removeListener('error', errorHandler);
+        connection.connected = false;
+        reject(error);
+      };
+
+      connection.socket.on('data', dataHandler);
+      connection.socket.on('error', errorHandler);
+
+      try {
+        connection.socket.write(message);
+      } catch (error) {
+        clearTimeout(timeoutId);
+        cleanup();
+        connection.socket.removeListener('data', dataHandler);
+        connection.socket.removeListener('error', errorHandler);
+        reject(error);
+      }
+    });
   }
 
   async initialize() {
     try {
       logger.info("Initializing external service connections...");
       await this.initializeRpcClients();
+
+      const electrumxService = this.rpcClients['electrumx-rpc'];
+      if (electrumxService && electrumxService.config.protocol === 'tcp') {
+        await this.initializeElectrumxPool(electrumxService.config.host, electrumxService.config.port);
+      }
+
       this.initialized = true;
       logger.info("All external service connections initialized successfully");
     } catch (error) {
@@ -228,7 +515,7 @@ class ServiceManager {
     return new Promise((resolve, reject) => {
       const client = new net.Socket();
       const connectionId = `${host}:${port}:${Date.now()}:${Math.random()}`;
-      
+
       this.activeTcpConnections.add({
         socket: client,
         connectionId,
@@ -258,7 +545,7 @@ class ServiceManager {
               this.activeTcpConnections.delete(conn);
             }
           });
-          
+
           try {
             if (!client.destroyed) {
               client.destroy();
@@ -315,7 +602,7 @@ class ServiceManager {
 
   cleanupStaleConnections() {
     const now = Date.now();
-    const maxAge = 60000; 
+    const maxAge = 60000;
     let cleanedCount = 0;
 
     this.activeTcpConnections.forEach(conn => {
@@ -331,6 +618,12 @@ class ServiceManager {
         this.activeTcpConnections.delete(conn);
       }
     });
+
+    const brokenConnections = this.electrumxPool.connections.filter(conn => !conn.connected);
+    if (brokenConnections.length > 0) {
+      logger.debug(`Cleaning up ${brokenConnections.length} broken ElectrumX pool connections`);
+      this.electrumxPool.connections = this.electrumxPool.connections.filter(conn => conn.connected);
+    }
 
     if (cleanedCount > 0) {
       logger.debug(`Cleaned up ${cleanedCount} stale TCP connections`);
@@ -369,7 +662,7 @@ class ServiceManager {
 
         if (config.type === "json-rpc") {
           if (config.protocol === "tcp") {
-            result = await this.callTcpRpc(config.host, config.port, method, params, config.timeout);
+            result = await this.callTcpRpcWithPool(config.host, config.port, method, params, config.timeout);
           } else {
             const payload = {
               jsonrpc: "2.0",
@@ -1084,6 +1377,24 @@ class ServiceManager {
         ...this.circuitBreaker,
         isOpen: this.isCircuitBreakerOpen()
       },
+      electrumxPool: {
+        totalConnections: this.electrumxPool.connections.length,
+        availableConnections: this.electrumxPool.connections.filter(conn => conn.connected && !conn.busy).length,
+        busyConnections: this.electrumxPool.connections.filter(conn => conn.connected && conn.busy).length,
+        brokenConnections: this.electrumxPool.connections.filter(conn => !conn.connected).length,
+        host: this.electrumxPool.host,
+        port: this.electrumxPool.port,
+        minConnections: this.electrumxPool.minConnections,
+        maxConnections: this.electrumxPool.maxConnections,
+        expansionBatchSize: this.electrumxPool.expansionBatchSize,
+        utilizationRate: this.electrumxPool.connections.length > 0 ?
+          (this.electrumxPool.connections.filter(conn => conn.connected && conn.busy).length / this.electrumxPool.connections.length * 100).toFixed(1) + '%' : '0%',
+        stats: {
+          ...this.electrumxPool.stats,
+          hitRate: this.electrumxPool.stats.totalRequests > 0 ?
+            (this.electrumxPool.stats.poolHits / this.electrumxPool.stats.totalRequests * 100).toFixed(2) + '%' : '0%'
+        }
+      }
     };
   }
 
@@ -1108,18 +1419,30 @@ class ServiceManager {
       });
       this.activeTcpConnections.clear();
 
+      logger.info(`ServiceManager: Closing ${this.electrumxPool.connections.length} ElectrumX pool connections`);
+      this.electrumxPool.connections.forEach(conn => {
+        try {
+          if (conn.socket && !conn.socket.destroyed) {
+            conn.socket.destroy();
+          }
+        } catch (error) {
+          logger.debug('Error closing ElectrumX pool connection during shutdown', { error: error.message });
+        }
+      });
+      this.electrumxPool.connections = [];
+
       for (const [serviceName, serviceData] of Object.entries(this.rpcClients)) {
         try {
           const { client, config } = serviceData;
-          
+
           if (config.type === "json-rpc" && config.protocol !== "tcp") {
             if (client && typeof client.defaults === 'object') {
               if (client.defaults.timeout) {
-                client.defaults.timeout = 100; 
+                client.defaults.timeout = 100;
               }
             }
           }
-          
+
           logger.debug(`ServiceManager: Cleaned up service client: ${serviceName}`);
         } catch (error) {
           logger.warn(`ServiceManager: Error cleaning up service client ${serviceName}`, {
