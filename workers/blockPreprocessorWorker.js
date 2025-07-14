@@ -253,7 +253,6 @@ class BlockPreprocessorWorker {
         blockDocs.push({
           hash: block.hash,
           height: block.height,
-          confirmations: block.confirmations,
           size: block.size,
           version: block.version,
           versionHex: block.versionHex,
@@ -268,7 +267,6 @@ class BlockPreprocessorWorker {
           previousblockhash: block.previousblockhash,
           nextblockhash: block.nextblockhash,
           tx: block.tx,
-          coinbaseTx: block.coinbaseTx,
           totalFees: block.totalFees,
           miner: block.miner
         });

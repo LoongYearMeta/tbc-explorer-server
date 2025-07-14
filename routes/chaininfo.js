@@ -44,20 +44,20 @@ router.get("/txstats/:blockCount?", async (req, res, next) => {
 
     if (blockCount !== undefined) {
       const txStats = await serviceManager.getChainTxStats(blockCount);
-      
+
       res.status(200).json({
         txStats,
         blockCount: blockCount
       });
     } else {
       const timePeriods = [
-        { label: "1 day", blocks: 144 },      
-        { label: "7 days", blocks: 1008 },   
-        { label: "30 days", blocks: 4320 },   
-        { label: "365 days", blocks: 52560 }  
+        { label: "1 day", blocks: 144 },
+        { label: "7 days", blocks: 1008 },
+        { label: "30 days", blocks: 4320 },
+        { label: "365 days", blocks: 52560 }
       ];
 
-      const txStatsPromises = timePeriods.map(period => 
+      const txStatsPromises = timePeriods.map(period =>
         generalRpcAggregator.callRpc('getChainTxStats', [period.blocks])
           .then(stats => ({
             period: period.label,
@@ -75,23 +75,23 @@ router.get("/txstats/:blockCount?", async (req, res, next) => {
 
       let time = null;
       let txcount = null;
-      
+
       const processedTxStatsList = txStatsList.map(item => {
         if (item.stats && !item.error) {
           if (time === null && txcount === null) {
             time = item.stats.time;
             txcount = item.stats.txcount;
           }
-          
+
           const { time: statsTime, txcount: statsTxcount, ...remainingStats } = item.stats;
-          
+
           return {
             period: item.period,
             blockCount: item.blockCount,
             stats: remainingStats
           };
         }
-        return item; 
+        return item;
       });
 
       res.status(200).json({

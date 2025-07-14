@@ -13,7 +13,6 @@ function formatBlockResponse(block) {
   return {
     tx: block.tx,
     hash: block.hash,
-    confirmations: block.confirmations,
     size: block.size,
     height: block.height,
     version: block.version,
@@ -28,7 +27,6 @@ function formatBlockResponse(block) {
     chainwork: block.chainwork,
     previousblockhash: block.previousblockhash,
     nextblockhash: block.nextblockhash,
-    coinbaseTx: block.coinbaseTx,
     totalFees: block.totalFees,
     miner: block.miner
   };
@@ -76,7 +74,6 @@ router.get("/height/:height", async (req, res, next) => {
             const blockDoc = new Block({
               hash: block.hash,
               height: block.height,
-              confirmations: block.confirmations,
               size: block.size,
               version: block.version,
               versionHex: block.versionHex,
@@ -91,7 +88,6 @@ router.get("/height/:height", async (req, res, next) => {
               previousblockhash: block.previousblockhash,
               nextblockhash: block.nextblockhash,
               tx: block.tx,
-              coinbaseTx: block.coinbaseTx,
               totalFees: block.totalFees,
               miner: block.miner
             });
@@ -162,7 +158,6 @@ router.get("/hash/:hash", async (req, res, next) => {
             const blockDoc = new Block({
               hash: block.hash,
               height: block.height,
-              confirmations: block.confirmations,
               size: block.size,
               version: block.version,
               versionHex: block.versionHex,
@@ -177,7 +172,6 @@ router.get("/hash/:hash", async (req, res, next) => {
               previousblockhash: block.previousblockhash,
               nextblockhash: block.nextblockhash,
               tx: block.tx,
-              coinbaseTx: block.coinbaseTx,
               totalFees: block.totalFees,
               miner: block.miner
             });
@@ -280,7 +274,6 @@ router.post("/heights", async (req, res, next) => {
           blockDocs.push({
             hash: block.hash,
             height: block.height,
-            confirmations: block.confirmations,
             size: block.size,
             version: block.version,
             versionHex: block.versionHex,
@@ -295,7 +288,6 @@ router.post("/heights", async (req, res, next) => {
             previousblockhash: block.previousblockhash,
             nextblockhash: block.nextblockhash,
             tx: block.tx,
-            coinbaseTx: block.coinbaseTx,
             totalFees: block.totalFees,
             miner: block.miner
           });
@@ -424,7 +416,6 @@ router.get("/latest", async (req, res, next) => {
           blockDocs.push({
             hash: block.hash,
             height: block.height,
-            confirmations: block.confirmations,
             size: block.size,
             version: block.version,
             versionHex: block.versionHex,
@@ -439,7 +430,6 @@ router.get("/latest", async (req, res, next) => {
             previousblockhash: block.previousblockhash,
             nextblockhash: block.nextblockhash,
             tx: block.tx,
-            coinbaseTx: block.coinbaseTx,
             totalFees: block.totalFees,
             miner: block.miner
           });

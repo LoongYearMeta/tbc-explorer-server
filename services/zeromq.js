@@ -238,7 +238,6 @@ class ZeroMQService {
       const blockDoc = new Block({
         hash: blockDetails.hash,
         height: blockDetails.height,
-        confirmations: blockDetails.confirmations,
         size: blockDetails.size,
         version: blockDetails.version,
         versionHex: blockDetails.versionHex,
@@ -253,7 +252,6 @@ class ZeroMQService {
         previousblockhash: blockDetails.previousblockhash,
         nextblockhash: blockDetails.nextblockhash,
         tx: blockDetails.tx,
-        coinbaseTx: blockDetails.coinbaseTx,
         totalFees: blockDetails.totalFees,
         miner: blockDetails.miner
       });
