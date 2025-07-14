@@ -1277,86 +1277,22 @@ class ServiceManager {
     try {
       const scriptHash = addressToScriptHash(address);
       const history = await this.callRpcMethod("electrumx-rpc", "blockchain.scripthash.get_history", [scriptHash]);
-
       if (!history || !Array.isArray(history)) {
         return {
           address,
-          scriptHash,
-          transactions: [],
+          txIds: [],
           totalTransactions: 0
         };
       }
-
-      const sortedHistory = history.map(item => ({
-        tx_hash: item.tx_hash,
-        height: item.height
-      })).sort((a, b) => {
-        if (a.height === 0 && b.height !== 0) return -1;
-        if (a.height !== 0 && b.height === 0) return 1;
-
-        if (a.height === 0 && b.height === 0) {
-          return b.tx_hash.localeCompare(a.tx_hash);
-        }
-
-        if (b.height !== a.height) {
-          return b.height - a.height;
-        }
-
-        return b.tx_hash.localeCompare(a.tx_hash);
-      });
-
+      const txIds = history.map(item => item.tx_hash);
       return {
         address,
         scriptHash,
-        transactions: sortedHistory,
-        totalTransactions: sortedHistory.length
+        txIds,
+        totalTransactions: txIds.length
       };
     } catch (error) {
       logger.error("Error getting address transaction IDs", {
-        address,
-        error: error.message
-      });
-      throw error;
-    }
-  }
-
-  async validateAddress(address) {
-    try {
-      const result = await this.callRpcMethod("node-rpc", "validateaddress", [address]);
-      return {
-        address,
-        ...result
-      };
-    } catch (error) {
-      logger.error("Error validating address", {
-        address,
-        error: error.message
-      });
-      throw error;
-    }
-  }
-
-  async getAddressDetails(address) {
-    try {
-      const [validation, balance, transactionInfo] = await Promise.all([
-        this.validateAddress(address),
-        this.getAddressBalance(address),
-        this.getAddressTransactionIds(address)
-      ]);
-
-      return {
-        address,
-        validation,
-        balance: {
-          confirmed: balance.confirmed || 0,
-          unconfirmed: balance.unconfirmed || 0
-        },
-        transactions: transactionInfo.transactions,
-        totalTransactions: transactionInfo.totalTransactions,
-        scriptHash: transactionInfo.scriptHash
-      };
-    } catch (error) {
-      logger.error("Error getting address details", {
         address,
         error: error.message
       });
