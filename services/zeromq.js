@@ -258,6 +258,10 @@ class ZeroMQService {
 
       await blockDoc.save();
       logger.info(`[ZMQ] Successfully saved block ${blockHash} (height: ${blockDetails.height}) to database`);
+
+      // Update the previous block's nextblockhash field
+      await this.updatePreviousBlockNextHash(blockDetails);
+
       await this.processBlockTransactions(blockDetails);
       await this.updateRedisBlockCache(blockDetails);
       this.scheduleUpdateMempoolCache(blockDetails.tx, blockDetails.height);
@@ -270,6 +274,141 @@ class ZeroMQService {
           stack: error.stack
         });
       }
+    }
+  }
+
+  async updatePreviousBlockNextHash(blockDetails) {
+    try {
+      if (!blockDetails.previousblockhash) {
+        logger.debug(`[ZMQ] Block ${blockDetails.hash} has no previous block (genesis block)`);
+        return;
+      }
+
+      // Update the previous block's nextblockhash field in database
+      const updateResult = await Block.updateOne(
+        { hash: blockDetails.previousblockhash },
+        { $set: { nextblockhash: blockDetails.hash } }
+      );
+
+      if (updateResult.modifiedCount > 0) {
+        logger.debug(`[ZMQ] Updated previous block ${blockDetails.previousblockhash} nextblockhash to ${blockDetails.hash}`);
+      } else {
+        // Check if the previous block exists at all
+        const existingPreviousBlock = await Block.findOne({ hash: blockDetails.previousblockhash });
+        if (!existingPreviousBlock) {
+          logger.warn(`[ZMQ] Previous block ${blockDetails.previousblockhash} not found in database, fetching from RPC`);
+          await this.fetchAndSavePreviousBlock(blockDetails.previousblockhash, blockDetails.hash);
+        } else {
+          logger.debug(`[ZMQ] Previous block ${blockDetails.previousblockhash} already has correct nextblockhash`);
+        }
+      }
+
+      // Update the previous block in Redis cache if it exists
+      await this.updatePreviousBlockInRedisCache(blockDetails.previousblockhash, blockDetails.hash);
+
+    } catch (error) {
+      logger.error(`[ZMQ] Error updating previous block nextblockhash`, {
+        error: error.message,
+        stack: error.stack,
+        currentBlockHash: blockDetails.hash,
+        previousBlockHash: blockDetails.previousblockhash
+      });
+    }
+  }
+
+  async fetchAndSavePreviousBlock(previousBlockHash, currentBlockHash) {
+    try {
+      if (!this.serviceManager) {
+        logger.warn(`[ZMQ] ServiceManager not set, cannot fetch previous block ${previousBlockHash}`);
+        return;
+      }
+
+      logger.debug(`[ZMQ] Fetching previous block details for ${previousBlockHash}`);
+      const previousBlockDetails = await this.serviceManager.getBlockByHash(previousBlockHash);
+
+      if (!previousBlockDetails) {
+        logger.error(`[ZMQ] Failed to fetch previous block details for ${previousBlockHash}`);
+        return;
+      }
+
+      // Set the nextblockhash field to the current block
+      const previousBlockDoc = new Block({
+        hash: previousBlockDetails.hash,
+        height: previousBlockDetails.height,
+        size: previousBlockDetails.size,
+        version: previousBlockDetails.version,
+        versionHex: previousBlockDetails.versionHex,
+        merkleroot: previousBlockDetails.merkleroot,
+        num_tx: previousBlockDetails.num_tx,
+        time: previousBlockDetails.time,
+        mediantime: previousBlockDetails.mediantime,
+        nonce: previousBlockDetails.nonce,
+        bits: previousBlockDetails.bits,
+        difficulty: previousBlockDetails.difficulty,
+        chainwork: previousBlockDetails.chainwork,
+        previousblockhash: previousBlockDetails.previousblockhash,
+        nextblockhash: currentBlockHash, // Set to current block hash
+        tx: previousBlockDetails.tx,
+        totalFees: previousBlockDetails.totalFees,
+        miner: previousBlockDetails.miner
+      });
+
+      await previousBlockDoc.save();
+      logger.info(`[ZMQ] Successfully fetched and saved previous block ${previousBlockHash} (height: ${previousBlockDetails.height}) with nextblockhash set to ${currentBlockHash}`);
+
+      // Also process the transactions for this block if needed
+      await this.processBlockTransactions(previousBlockDetails);
+      
+      // Update Redis cache with the previous block
+      await this.updateRedisBlockCache(previousBlockDetails);
+
+    } catch (error) {
+      if (error.code === 11000) {
+        logger.debug(`[ZMQ] Previous block ${previousBlockHash} already exists (concurrent write), updating nextblockhash`);
+        // Try to update the nextblockhash again
+        try {
+          await Block.updateOne(
+            { hash: previousBlockHash },
+            { $set: { nextblockhash: currentBlockHash } }
+          );
+          logger.debug(`[ZMQ] Updated nextblockhash for existing previous block ${previousBlockHash}`);
+        } catch (updateError) {
+          logger.error(`[ZMQ] Failed to update nextblockhash for existing previous block ${previousBlockHash}`, {
+            error: updateError.message
+          });
+        }
+      } else {
+        logger.error(`[ZMQ] Error fetching and saving previous block ${previousBlockHash}`, {
+          error: error.message,
+          stack: error.stack
+        });
+      }
+    }
+  }
+
+  async updatePreviousBlockInRedisCache(previousBlockHash, currentBlockHash) {
+    try {
+      // Check if previous block exists in Redis cache
+      const pattern = 'tbc-explorer:blocks:recent:*';
+      const blockKeys = await redisService.exec('KEYS', pattern);
+      
+      for (const key of blockKeys) {
+        const cachedBlock = await redisService.getJSON(key.replace('tbc-explorer:', ''));
+        if (cachedBlock && cachedBlock.hash === previousBlockHash) {
+          // Update the cached block's nextblockhash field
+          cachedBlock.nextblockhash = currentBlockHash;
+          await redisService.setJSON(key.replace('tbc-explorer:', ''), cachedBlock);
+          logger.debug(`[ZMQ] Updated previous block ${previousBlockHash} nextblockhash in Redis cache`);
+          break;
+        }
+      }
+    } catch (error) {
+      logger.error(`[ZMQ] Error updating previous block in Redis cache`, {
+        error: error.message,
+        stack: error.stack,
+        previousBlockHash,
+        currentBlockHash
+      });
     }
   }
 
