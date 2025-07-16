@@ -10,11 +10,12 @@ import os from "os";
 
 import logger from "./config/logger.js";
 import { connectDB, disconnectDB } from "./config/db.js";
-import { connectRedis, disconnectRedis, redis, getRedisStats } from "./config/redis.js";
+import { connectRedis, disconnectRedis, getRedisStats } from "./config/redis.js";
 import {
   requestLogger,
   errorLogger,
 } from "./middleware/requestLogger.js";
+import { globalRateLimit } from "./middleware/rateLimiter.js";
 import serviceManager from "./services/ServiceManager.js";
 import transactionAggregator from "./services/TransactionAggregator.js";
 import generalRpcAggregator from "./services/GeneralRpcAggregator.js";
@@ -24,8 +25,8 @@ import transactionRoutes from "./routes/transaction.js";
 import chaininfoRoutes from "./routes/chaininfo.js";
 import mempoolRoutes from "./routes/mempool.js";
 import networkRoutes from "./routes/network.js";
+import adminRoutes from "./routes/admin.js";
 import { getRealClientIP } from "./lib/util.js";
-import { generateConnectionReport } from "./config/connectionConfig.js";
 
 dotenv.config();
 
@@ -75,136 +76,37 @@ async function startHttpServer() {
   app.use(requestLogger);
   app.use(express.json());
 
-  async function getMongoPoolStats(type) {
-    try {
-      if (mongoose.connection.readyState !== 1) {
-        return 'disconnected';
-      }
-
-      const db = mongoose.connection.db;
-      if (!db) {
-        return 'no-db';
-      }
-
-      const serverStatus = await db.admin().serverStatus();
-      const connections = serverStatus.connections;
-
-      if (type === 'current') {
-        return connections.current || 0;
-      } else if (type === 'available') {
-        return connections.available || 0;
-      }
-
-      return 'unknown';
-    } catch (error) {
-      logger.debug('Failed to get MongoDB pool stats', { error: error.message });
-      return 'error';
-    }
-  }
-
   app.get("/health", async (req, res) => {
     const serviceStatus = serviceManager.getServiceStatus();
-    const dbConnectionStates = {
-      0: 'disconnected',
-      1: 'connected',
-      2: 'connecting',
-      3: 'disconnecting'
-    };
-
+    
     const dbState = mongoose.connection.readyState;
-    const dbStatus = {
-      state: dbConnectionStates[dbState] || 'unknown',
-      connected: dbState === 1,
-      host: mongoose.connection.host,
-      name: mongoose.connection.name,
-      readyState: dbState,
-      poolInfo: {
-        maxPoolSize: parseInt(process.env.MONGO_MAX_POOL_SIZE) || 1500,
-        minPoolSize: parseInt(process.env.MONGO_MIN_POOL_SIZE) || 50,
-        maxIdleTimeMS: parseInt(process.env.MONGO_MAX_IDLE_TIME) || 30000,
-        serverSelectionTimeoutMS: parseInt(process.env.MONGO_SERVER_SELECTION_TIMEOUT) || 5000,
-        heartbeatFrequencyMS: parseInt(process.env.MONGO_HEARTBEAT_FREQUENCY) || 10000,
-        currentConnections: await getMongoPoolStats('current'),
-        availableConnections: await getMongoPoolStats('available')
-      }
-    };
-
+    const dbConnected = dbState === 1;
+    
     const redisStats = getRedisStats();
-    const redisStatus = {
-      connected: redis.status === 'ready',
-      state: redis.status,
-      host: redis.options.host,
-      port: redis.options.port,
-      keyPrefix: redis.options.keyPrefix,
-      stats: redisStats,
-      healthy: redisStats.status === 'ready' && redisStats.errors < 10
-    };
-
-    const memoryUsage = process.memoryUsage();
-    const systemInfo = {
-      pid: process.pid,
-      uptime: process.uptime(),
-      nodeVersion: process.version,
-      memory: {
-        rss: Math.round(memoryUsage.rss / 1024 / 1024) + 'MB',
-        heapTotal: Math.round(memoryUsage.heapTotal / 1024 / 1024) + 'MB',
-        heapUsed: Math.round(memoryUsage.heapUsed / 1024 / 1024) + 'MB',
-        external: Math.round(memoryUsage.external / 1024 / 1024) + 'MB'
-      },
-      cpuUsage: process.cpuUsage()
-    };
-
-    const overallHealthy = serviceStatus.initialized &&
-      dbStatus.connected &&
-      redisStatus.connected &&
-      redisStatus.healthy;
-
-    const healthScore = {
-      database: dbStatus.connected ? 100 : 0,
-      redis: redisStatus.healthy ? 100 : Math.max(0, 100 - redisStats.errors * 10),
-      services: serviceStatus.initialized ? 100 : 0,
-      overall: overallHealthy ? 100 : Math.min(
-        (dbStatus.connected ? 33 : 0) +
-        (redisStatus.healthy ? 33 : 0) +
-        (serviceStatus.initialized ? 34 : 0)
-      )
-    };
-
-    const connectionReport = generateConnectionReport();
+    const redisConnected = redisStats.status === 'ready';
+    
+    const overallHealthy = serviceStatus.initialized && dbConnected && redisConnected;
 
     logger.info("Health check request", {
       worker: process.pid,
       ip: getRealClientIP(req),
-      serviceStatus: serviceStatus.initialized,
-      dbStatus: dbStatus.connected,
-      redisStatus: redisStatus.connected,
-      overallHealthy,
-      healthScore: healthScore.overall,
-      processType: connectionReport.processInfo.type,
-      workerId: connectionReport.processInfo.workerId
+      healthy: overallHealthy
     });
 
     res.status(overallHealthy ? 200 : 503).json({
-      message: overallHealthy ? "Service is running" : "Service is unhealthy",
       healthy: overallHealthy,
-      worker: process.pid,
       timestamp: new Date().toISOString(),
-      healthScore,
-      services: serviceStatus,
-      database: dbStatus,
-      redis: redisStatus,
-      system: systemInfo,
-      connectionConfig: connectionReport,
-      warnings: [
-        ...(redisStats.errors > 10 ? [`High Redis error count: ${redisStats.errors}`] : []),
-        ...(memoryUsage.heapUsed > memoryUsage.heapTotal * 0.95 ? ['Critical memory usage'] : []),
-        ...(memoryUsage.rss > 1024 * 1024 * 1024 ? ['High RSS memory usage (>1GB)'] : []),
-        ...(dbState !== 1 ? ['Database not connected'] : []),
-        ...(redis.status !== 'ready' ? ['Redis not ready'] : []),
-        ...connectionReport.warnings
-      ]
+      services: {
+        database: dbConnected,
+        redis: redisConnected,
+        serviceManager: serviceStatus.initialized
+      },
+      worker: process.pid
     });
   });
+
+  // 应用全局限流中间件
+  app.use(globalRateLimit);
 
   app.use("/address", addressRoutes);
   app.use("/block", blockRoutes);
@@ -212,6 +114,7 @@ async function startHttpServer() {
   app.use("/chain", chaininfoRoutes);
   app.use("/mempool", mempoolRoutes);
   app.use("/network", networkRoutes);
+  app.use("/admin", adminRoutes);
 
   app.use(function (_req, _res, next) {
     next(createError(404));

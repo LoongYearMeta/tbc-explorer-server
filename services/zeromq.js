@@ -296,7 +296,7 @@ class ZeroMQService {
         if (!existingPreviousBlock) {
           logger.warn(`[ZMQ] Previous block ${blockDetails.previousblockhash} not found in database, fetching from RPC`);
           await this.fetchAndSavePreviousBlock(blockDetails.previousblockhash, blockDetails.hash);
-          needsRedisUpdate = false; 
+          needsRedisUpdate = false;
         } else {
           logger.debug(`[ZMQ] Previous block ${blockDetails.previousblockhash} already has correct nextblockhash`);
         }
@@ -346,7 +346,7 @@ class ZeroMQService {
         difficulty: previousBlockDetails.difficulty,
         chainwork: previousBlockDetails.chainwork,
         previousblockhash: previousBlockDetails.previousblockhash,
-        nextblockhash: currentBlockHash, 
+        nextblockhash: currentBlockHash,
         tx: previousBlockDetails.tx,
         totalFees: previousBlockDetails.totalFees,
         miner: previousBlockDetails.miner

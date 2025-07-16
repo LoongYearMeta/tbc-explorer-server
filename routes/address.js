@@ -3,10 +3,11 @@ import express from "express";
 import serviceManager from "../services/ServiceManager.js";
 import logger from "../config/logger.js";
 import { getRealClientIP } from "../lib/util.js";
+import { addressRateLimit } from "../middleware/rateLimiter.js";
 
 const router = express.Router();
 
-router.get("/:address", async (req, res, next) => {
+router.get("/:address", addressRateLimit, async (req, res, next) => {
   try {
     const { address } = req.params;
     

@@ -6,10 +6,11 @@ import redisService from "../services/RedisService.js";
 import logger from "../config/logger.js";
 import { Transaction } from "../models/transaction.js";
 import { getRealClientIP } from "../lib/util.js";
+import { transactionRateLimit, rawTransactionRateLimit, batchTransactionRateLimit } from "../middleware/rateLimiter.js";
 
 const router = express.Router();
 
-router.get("/:txid", async (req, res, next) => {
+router.get("/:txid", transactionRateLimit, async (req, res, next) => {
   try {
     const { txid } = req.params;
 
@@ -41,7 +42,7 @@ router.get("/:txid", async (req, res, next) => {
   }
 });
 
-router.get("/:txid/raw", async (req, res, next) => {
+router.get("/:txid/raw", rawTransactionRateLimit, async (req, res, next) => {
   try {
     const { txid } = req.params;
 
@@ -99,7 +100,7 @@ router.get("/:txid/raw", async (req, res, next) => {
   }
 });
 
-router.post("/batch/raw", async (req, res, next) => {
+router.post("/batch/raw", batchTransactionRateLimit, async (req, res, next) => {
   try {
     const { txids } = req.body;
 
