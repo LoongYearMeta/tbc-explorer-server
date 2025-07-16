@@ -232,30 +232,4 @@ router.delete("/ratelimit/:ip", async (req, res) => {
     }
 });
 
-router.get("/ratelimit/config", async (req, res) => {
-    try {
-        logger.info("Rate limit config request", {
-            adminIp: getRealClientIP(req),
-        });
-
-        res.json({
-            algorithm: 'sliding-window',
-            endpoints: Object.keys(rateLimiter.config),
-            endpointLimits: {
-                global: `${rateLimiter.config.global.max}/${rateLimiter.config.global.windowMs / 1000}s`,
-                address: `${rateLimiter.config.address.max}/${rateLimiter.config.address.windowMs / 1000}s`,
-                transaction: `${rateLimiter.config.transaction.max}/${rateLimiter.config.transaction.windowMs / 1000}s`,
-                rawTransaction: `${rateLimiter.config.rawTransaction.max}/${rateLimiter.config.rawTransaction.windowMs / 1000}s`,
-                batchTransaction: `${rateLimiter.config.batchTransaction.max}/${rateLimiter.config.batchTransaction.windowMs / 1000}s`
-            }
-        });
-    } catch (error) {
-        logger.error('Get rate limit config error', { error: error.message });
-        res.status(500).json({
-            error: 'Internal server error',
-            message: error.message
-        });
-    }
-});
-
 export default router; 

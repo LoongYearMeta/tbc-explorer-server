@@ -16,7 +16,7 @@ const blockSchema = new mongoose.Schema({
   chainwork: { type: String, required: true },
   previousblockhash: { type: String, required: true },
   nextblockhash: { type: String, default: null },
-  tx: [{ type: String, required: true }], 
+  tx: [{ type: String, required: true }],
   totalFees: { type: String, required: true },
   miner: { type: String, required: true }
 }, {

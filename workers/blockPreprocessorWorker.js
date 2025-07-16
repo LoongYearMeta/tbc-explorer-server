@@ -13,7 +13,7 @@ dotenv.config();
 class BlockPreprocessorWorker {
   constructor() {
     this.isRunning = false;
-    this.startHeight = null; 
+    this.startHeight = null;
     this.batchSize = 100;
     this.delayBetweenBatches = 5000;
     this.maxRetries = 3;
@@ -71,10 +71,10 @@ class BlockPreprocessorWorker {
       logger.info("BlockPreprocessorWorker: Initializing...");
       await connectDB();
       await serviceManager.initialize();
-      
+
       const config = await this.loadConfig();
       this.startHeight = config.lastProcessedHeight;
-      
+
       logger.info("BlockPreprocessorWorker: Initialization completed", {
         startHeight: this.startHeight
       });
@@ -322,25 +322,25 @@ class BlockPreprocessorWorker {
     try {
       logger.info("BlockPreprocessorWorker: Starting transaction preprocessing for latest 1000 blocks");
 
-      const MAX_BLOCKS = 10000;  
-      const TARGET_BLOCKS = 9000; 
-      
+      const MAX_BLOCKS = 10000;
+      const TARGET_BLOCKS = 9000;
+
       const currentBlockCount = await Transaction.getDistinctBlockCount();
       if (currentBlockCount >= MAX_BLOCKS) {
-        const sortedHeights = await Transaction.getDistinctBlockHeights(-1); 
+        const sortedHeights = await Transaction.getDistinctBlockHeights(-1);
         const blocksToKeep = sortedHeights.slice(0, TARGET_BLOCKS);
         const minHeightToKeep = Math.min(...blocksToKeep);
-        
+
         logger.info(`BlockPreprocessorWorker: Block count (${currentBlockCount}) reached ${MAX_BLOCKS}, cleaning up transactions below height ${minHeightToKeep}`);
-        
+
         const deleteResult = await Transaction.deleteBeforeHeight(minHeightToKeep);
-        
+
         logger.info(`BlockPreprocessorWorker: Cleaned up ${deleteResult.deletedCount} transactions from old blocks, maintaining ${TARGET_BLOCKS} newest blocks`);
       }
 
       const blockchainInfo = await serviceManager.getBlockchainInfo();
       const latestHeight = blockchainInfo.blocks;
-      const startHeight = Math.max(0, latestHeight - 999); 
+      const startHeight = Math.max(0, latestHeight - 999);
 
       logger.info("BlockPreprocessorWorker: Transaction preprocessing range", {
         startHeight,
@@ -371,9 +371,9 @@ class BlockPreprocessorWorker {
 
       const blocksToProcess = [];
       const completelyProcessedBlocks = [];
-      
+
       logger.info("BlockPreprocessorWorker: Checking which blocks are already completely processed");
-      
+
       const allBlockTxMap = new Map();
       for (const height of heights) {
         const block = blockMap.get(height);
@@ -388,7 +388,7 @@ class BlockPreprocessorWorker {
 
       for (const [height, txIds] of allBlockTxMap) {
         const missingTxIds = txIds.filter(txid => !existingTxIds.has(txid));
-        
+
         if (missingTxIds.length === 0) {
           completelyProcessedBlocks.push(height);
         } else {
@@ -414,9 +414,9 @@ class BlockPreprocessorWorker {
 
       for (const blockInfo of blocksToProcess) {
         const { height, totalTxIds, missingTxIds } = blockInfo;
-        
+
         logger.debug(`BlockPreprocessorWorker: Processing block ${height} (${missingTxIds.length}/${totalTxIds.length} missing transactions)`);
-        
+
         const blockResult = await this.processBlockTransactions(height, totalTxIds, missingTxIds);
         totalProcessed += blockResult.totalProcessed;
         totalSaved += blockResult.totalSaved;
@@ -488,17 +488,17 @@ class BlockPreprocessorWorker {
         const batch = batches[i];
         try {
           const rawTxs = await serviceManager.getRawTransactionsHex(batch);
-          
+
           const txDocs = [];
           for (let j = 0; j < batch.length; j++) {
             const txid = batch[j];
             const rawTx = rawTxs[j];
-            
+
             if (rawTx) {
               txDocs.push({
                 txid: txid,
                 raw: rawTx,
-                blockHeight: blockHeight 
+                blockHeight: blockHeight
               });
             } else {
               logger.warn(`BlockPreprocessorWorker: Failed to get raw transaction for txid: ${txid}`);
@@ -508,9 +508,9 @@ class BlockPreprocessorWorker {
 
           if (txDocs.length > 0) {
             try {
-              const result = await Transaction.insertMany(txDocs, { 
+              const result = await Transaction.insertMany(txDocs, {
                 ordered: false,
-                rawResult: true 
+                rawResult: true
               });
               const savedCount = result.insertedCount || txDocs.length;
               totalSaved += savedCount;

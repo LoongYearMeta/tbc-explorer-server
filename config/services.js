@@ -30,7 +30,7 @@ const servicesConfig = {
     username: process.env.ELECTRUMX_RPC_USERNAME || "",
     password: process.env.ELECTRUMX_RPC_PASSWORD || "",
     get url() {
-      return this.protocol === "tcp" 
+      return this.protocol === "tcp"
         ? `tcp://${this.host}:${this.port}`
         : `http://${this.host}:${this.port}${this.path}`;
     },

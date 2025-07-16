@@ -69,7 +69,7 @@ router.get("/height/:height", async (req, res, next) => {
         block = await serviceManager.getBlockByHeight(height);
         if (block) {
           logger.debug(`Block height ${height} fetched from RPC`);
-          
+
           try {
             const blockDoc = new Block({
               hash: block.hash,
@@ -153,7 +153,7 @@ router.get("/hash/:hash", async (req, res, next) => {
         block = await serviceManager.getBlockByHash(hash);
         if (block) {
           logger.debug(`Block hash ${hash} fetched from RPC`);
-          
+
           try {
             const blockDoc = new Block({
               hash: block.hash,
@@ -233,20 +233,20 @@ router.post("/heights", async (req, res, next) => {
 
     const redisBlockMap = new Map();
     try {
-      const redisPromises = heights.map(height => 
+      const redisPromises = heights.map(height =>
         redisService.getJSON(`blocks:recent:${height}`).catch(err => {
           logger.debug(`Redis lookup failed for block height ${height}:`, err.message);
           return null;
         })
       );
       const redisResults = await Promise.all(redisPromises);
-      
+
       redisResults.forEach((cachedBlock, index) => {
         if (cachedBlock) {
           redisBlockMap.set(heights[index], cachedBlock);
         }
       });
-      
+
       logger.debug(`Found ${redisBlockMap.size} blocks in Redis cache`);
     } catch (error) {
       logger.warn('Redis batch lookup failed', { error: error.message });
@@ -254,7 +254,7 @@ router.post("/heights", async (req, res, next) => {
 
     const redisNotFoundHeights = heights.filter(height => !redisBlockMap.has(height));
     let dbBlockMap = new Map();
-    
+
     if (redisNotFoundHeights.length > 0) {
       const dbBlocks = await Block.find({ height: { $in: redisNotFoundHeights } }).lean();
       dbBlockMap = new Map(dbBlocks.map(block => [block.height, block]));
@@ -374,20 +374,20 @@ router.get("/latest", async (req, res, next) => {
 
     const redisBlockMap = new Map();
     try {
-      const redisPromises = heights.map(height => 
+      const redisPromises = heights.map(height =>
         redisService.getJSON(`blocks:recent:${height}`).catch(err => {
           logger.debug(`Redis lookup failed for block height ${height}:`, err.message);
           return null;
         })
       );
       const redisResults = await Promise.all(redisPromises);
-      
+
       redisResults.forEach((cachedBlock, index) => {
         if (cachedBlock) {
           redisBlockMap.set(heights[index], cachedBlock);
         }
       });
-      
+
       logger.debug(`Found ${redisBlockMap.size} latest blocks in Redis cache`);
     } catch (error) {
       logger.warn('Redis batch lookup failed for latest blocks', { error: error.message });
@@ -395,7 +395,7 @@ router.get("/latest", async (req, res, next) => {
 
     const redisNotFoundHeights = heights.filter(height => !redisBlockMap.has(height));
     let dbBlockMap = new Map();
-    
+
     if (redisNotFoundHeights.length > 0) {
       const dbBlocks = await Block.find({ height: { $in: redisNotFoundHeights } }).lean();
       dbBlockMap = new Map(dbBlocks.map(block => [block.height, block]));

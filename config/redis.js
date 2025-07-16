@@ -46,7 +46,7 @@ let connectionStats = {
 };
 
 const createRedisPool = () => {
-  logger.info('Creating Redis connection pool with optimized configuration', { 
+  logger.info('Creating Redis connection pool with optimized configuration', {
     poolSize: POOL_SIZE,
     processType: connectionConfig.processType,
     workerId: connectionConfig.cluster.workerId,

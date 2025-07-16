@@ -140,6 +140,10 @@ class RateLimiter {
 
         return async (req, res, next) => {
             try {
+                if (req.originalUrl.startsWith('/admin')) {
+                    return next();
+                }
+                
                 const ip = getRealClientIP(req);
                 const endpoint = configName;
                 const key = this.generateKey(ip, endpoint);
@@ -176,8 +180,7 @@ class RateLimiter {
                     return res.status(429).json({
                         error: 'Rate limit exceeded',
                         message: config.message,
-                        resetTime: rateLimitInfo.resetTime,
-                        retryAfter: Math.ceil((rateLimitInfo.resetTime - Date.now()) / 1000)
+                        resetTime: rateLimitInfo.resetTime
                     });
                 }
                 logger.debug('Rate limit check passed', {
@@ -205,6 +208,10 @@ class RateLimiter {
 
         return async (req, res, next) => {
             try {
+                if (req.originalUrl.startsWith('/admin')) {
+                    return next();
+                }
+                
                 const ip = getRealClientIP(req);
                 const endpoint = `sliding_${configName}`;
                 const key = this.generateKey(ip, endpoint);
@@ -249,9 +256,7 @@ class RateLimiter {
                     return res.status(429).json({
                         error: 'Rate limit exceeded',
                         message: config.message,
-                        resetTime: rateLimitInfo.resetTime,
-                        retryAfter: Math.ceil((rateLimitInfo.resetTime - Date.now()) / 1000),
-                        algorithm: 'sliding-window'
+                        resetTime: rateLimitInfo.resetTime
                     });
                 }
                 logger.debug('Sliding window rate limit check passed', {
@@ -329,10 +334,10 @@ class RateLimiter {
         try {
             const key = this.generateKey(ip, endpoint);
             await redisService.del(key);
-            
+
             const slidingKey = this.generateKey(ip, `sliding_${endpoint}`);
             await redisService.del(slidingKey);
-            
+
             logger.info('Rate limit cleared', { ip, endpoint });
             return true;
         } catch (error) {

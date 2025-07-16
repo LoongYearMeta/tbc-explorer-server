@@ -25,7 +25,7 @@ class ZeroMQWorker {
       this.zeromqService.setServiceManager(serviceManager);
       logger.info("ZeroMQWorker: Initialization completed");
       await this.start();
-      
+
     } catch (error) {
       logger.error("ZeroMQWorker: Initialization failed", {
         error: error.message,
@@ -80,7 +80,7 @@ class ZeroMQWorker {
       if (this.zeromqService) {
         await this.zeromqService.stop();
       }
-      
+
       logger.info("ZeroMQWorker: ZeroMQ worker stopped successfully");
     } catch (error) {
       logger.error("ZeroMQWorker: Error stopping ZeroMQ worker", {
@@ -95,11 +95,11 @@ class ZeroMQWorker {
 
     try {
       await this.stop();
-      
+
       if (serviceManager) {
         await serviceManager.shutdown();
       }
-      
+
       await disconnectRedis();
       await disconnectDB();
 

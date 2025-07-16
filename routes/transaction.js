@@ -24,7 +24,7 @@ router.get("/:txid", transactionRateLimit, async (req, res, next) => {
       txid,
       ip: getRealClientIP(req),
     });
-    
+
     const transaction = await transactionAggregator.getRawTransaction(txid);
 
     if (!transaction) {
