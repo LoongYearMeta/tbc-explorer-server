@@ -5,12 +5,12 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 function getProcessType() {
-    if (cluster.isPrimary) {
-        return 'master';
-    }
-
     if (process.env.WORKER_TYPE) {
         return process.env.WORKER_TYPE;
+    }
+
+    if (cluster.isPrimary) {
+        return 'master';
     }
 
     if (cluster.isWorker) {

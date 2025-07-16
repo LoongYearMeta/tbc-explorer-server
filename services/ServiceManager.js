@@ -194,6 +194,10 @@ class ServiceManager {
   }
 
   async getAvailableElectrumxConnection() {
+    if (this.electrumxPool.connections.length === 0) {
+      return null;
+    }
+
     const availableConnections = this.electrumxPool.connections.filter(conn => conn.connected && !conn.busy);
 
     if (availableConnections.length > 0) {
@@ -243,6 +247,12 @@ class ServiceManager {
 
   async callTcpRpcWithPool(host, port, method, params, timeout = 10000) {
     this.electrumxPool.stats.totalRequests++;
+
+    if (this.electrumxPool.connections.length === 0) {
+      logger.debug('No ElectrumX connection pool available, using direct TCP RPC');
+      this.electrumxPool.stats.poolMisses++;
+      return this.callTcpRpc(host, port, method, params, timeout);
+    }
 
     const connection = await this.getAvailableElectrumxConnection();
 
@@ -338,7 +348,23 @@ class ServiceManager {
 
       const electrumxService = this.rpcClients['electrumx-rpc'];
       if (electrumxService && electrumxService.config.protocol === 'tcp') {
-        await this.initializeElectrumxPool(electrumxService.config.host, electrumxService.config.port);
+        const connectionConfig = getConnectionConfig();
+        const shouldCreateElectrumxPool = connectionConfig.electrumx.maxConnections > 0;
+
+        if (shouldCreateElectrumxPool) {
+          logger.info("ServiceManager: Creating ElectrumX connection pool for this process type", {
+            processType: connectionConfig.processType,
+            maxConnections: connectionConfig.electrumx.maxConnections,
+            minConnections: connectionConfig.electrumx.minConnections
+          });
+          await this.initializeElectrumxPool(electrumxService.config.host, electrumxService.config.port);
+        } else {
+          logger.info("ServiceManager: Skipping ElectrumX connection pool creation for this process type", {
+            processType: connectionConfig.processType,
+            maxConnections: connectionConfig.electrumx.maxConnections,
+            minConnections: connectionConfig.electrumx.minConnections
+          });
+        }
       }
 
       this.initialized = true;
@@ -619,10 +645,12 @@ class ServiceManager {
       }
     });
 
-    const brokenConnections = this.electrumxPool.connections.filter(conn => !conn.connected);
-    if (brokenConnections.length > 0) {
-      logger.debug(`Cleaning up ${brokenConnections.length} broken ElectrumX pool connections`);
-      this.electrumxPool.connections = this.electrumxPool.connections.filter(conn => conn.connected);
+    if (this.electrumxPool.connections.length > 0) {
+      const brokenConnections = this.electrumxPool.connections.filter(conn => !conn.connected);
+      if (brokenConnections.length > 0) {
+        logger.debug(`Cleaning up ${brokenConnections.length} broken ElectrumX pool connections`);
+        this.electrumxPool.connections = this.electrumxPool.connections.filter(conn => conn.connected);
+      }
     }
 
     if (cleanedCount > 0) {
@@ -1258,6 +1286,11 @@ class ServiceManager {
 
   async getAddressBalance(address) {
     try {
+      const connectionConfig = getConnectionConfig();
+      if (connectionConfig.electrumx.maxConnections === 0) {
+        throw new Error(`ElectrumX operations not available for ${connectionConfig.processType} process type`);
+      }
+
       const scriptHash = addressToScriptHash(address);
       const result = await this.callRpcMethod("electrumx-rpc", "blockchain.scripthash.get_balance", [scriptHash]);
       return {
@@ -1275,6 +1308,12 @@ class ServiceManager {
 
   async getAddressTransactionIds(address) {
     try {
+      const connectionConfig = getConnectionConfig();
+
+      if (connectionConfig.electrumx.maxConnections === 0) {
+        throw new Error(`ElectrumX operations not available for ${connectionConfig.processType} process type`);
+      }
+
       const scriptHash = addressToScriptHash(address);
       const history = await this.callRpcMethod("electrumx-rpc", "blockchain.scripthash.get_history", [scriptHash]);
       if (!history || !Array.isArray(history)) {
@@ -1301,6 +1340,9 @@ class ServiceManager {
   }
 
   getServiceStatus() {
+    const connectionConfig = getConnectionConfig();
+    const hasElectrumxPool = this.electrumxPool.connections.length > 0;
+
     return {
       initialized: this.initialized,
       rpcServices: Object.keys(this.rpcClients).map((name) => ({
@@ -1313,7 +1355,7 @@ class ServiceManager {
         ...this.circuitBreaker,
         isOpen: this.isCircuitBreakerOpen()
       },
-      electrumxPool: {
+      electrumxPool: hasElectrumxPool ? {
         totalConnections: this.electrumxPool.connections.length,
         availableConnections: this.electrumxPool.connections.filter(conn => conn.connected && !conn.busy).length,
         busyConnections: this.electrumxPool.connections.filter(conn => conn.connected && conn.busy).length,
@@ -1325,6 +1367,16 @@ class ServiceManager {
         expansionBatchSize: this.electrumxPool.expansionBatchSize,
         utilizationRate: this.electrumxPool.connections.length > 0 ?
           (this.electrumxPool.connections.filter(conn => conn.connected && conn.busy).length / this.electrumxPool.connections.length * 100).toFixed(1) + '%' : '0%',
+        stats: {
+          ...this.electrumxPool.stats,
+          hitRate: this.electrumxPool.stats.totalRequests > 0 ?
+            (this.electrumxPool.stats.poolHits / this.electrumxPool.stats.totalRequests * 100).toFixed(2) + '%' : '0%'
+        }
+      } : {
+        disabled: true,
+        reason: `ElectrumX pool disabled for ${connectionConfig.processType} process type`,
+        configuredMaxConnections: connectionConfig.electrumx.maxConnections,
+        configuredMinConnections: connectionConfig.electrumx.minConnections,
         stats: {
           ...this.electrumxPool.stats,
           hitRate: this.electrumxPool.stats.totalRequests > 0 ?
@@ -1355,17 +1407,21 @@ class ServiceManager {
       });
       this.activeTcpConnections.clear();
 
-      logger.info(`ServiceManager: Closing ${this.electrumxPool.connections.length} ElectrumX pool connections`);
-      this.electrumxPool.connections.forEach(conn => {
-        try {
-          if (conn.socket && !conn.socket.destroyed) {
-            conn.socket.destroy();
+      if (this.electrumxPool.connections.length > 0) {
+        logger.info(`ServiceManager: Closing ${this.electrumxPool.connections.length} ElectrumX pool connections`);
+        this.electrumxPool.connections.forEach(conn => {
+          try {
+            if (conn.socket && !conn.socket.destroyed) {
+              conn.socket.destroy();
+            }
+          } catch (error) {
+            logger.debug('Error closing ElectrumX pool connection during shutdown', { error: error.message });
           }
-        } catch (error) {
-          logger.debug('Error closing ElectrumX pool connection during shutdown', { error: error.message });
-        }
-      });
-      this.electrumxPool.connections = [];
+        });
+        this.electrumxPool.connections = [];
+      } else {
+        logger.info('ServiceManager: No ElectrumX pool connections to close');
+      }
 
       for (const [serviceName, serviceData] of Object.entries(this.rpcClients)) {
         try {
