@@ -119,42 +119,6 @@ router.get("/stats", async (req, res) => {
     }
 });
 
-router.get("/ratelimit/:ip", async (req, res) => {
-    try {
-        const { ip } = req.params;
-        const { endpoint = 'global' } = req.query;
-
-        logger.info("Rate limit status request", {
-            targetIp: ip,
-            endpoint,
-            adminIp: getRealClientIP(req),
-        });
-
-        const status = await rateLimiter.getStatus(ip, endpoint);
-
-        if (!status) {
-            return res.status(404).json({
-                error: "Rate limit status not found",
-                ip,
-                endpoint
-            });
-        }
-
-        res.json({
-            ip,
-            endpoint,
-            status,
-            limit: rateLimiter.config[endpoint] || rateLimiter.config.global
-        });
-    } catch (error) {
-        logger.error('Get rate limit status error', { error: error.message, ip: req.params.ip });
-        res.status(500).json({
-            error: 'Internal server error',
-            message: error.message
-        });
-    }
-});
-
 router.get("/ratelimit/:ip/all", async (req, res) => {
     try {
         const { ip } = req.params;
@@ -199,32 +163,49 @@ router.get("/ratelimit/:ip/all", async (req, res) => {
 router.delete("/ratelimit/:ip", async (req, res) => {
     try {
         const { ip } = req.params;
-        const { endpoint = 'global' } = req.query;
+        const endpoints = ['global', 'address', 'transaction', 'rawTransaction', 'batchTransaction'];
 
-        logger.info("Rate limit clear request", {
+        logger.info("Rate limit clear all request", {
             targetIp: ip,
-            endpoint,
             adminIp: getRealClientIP(req),
         });
 
-        const success = await rateLimiter.clearLimits(ip, endpoint);
+        const results = {};
+        let hasError = false;
 
-        if (!success) {
+        for (const endpoint of endpoints) {
+            try {
+                const success = await rateLimiter.clearLimits(ip, endpoint);
+                results[endpoint] = success ? 'cleared' : 'failed';
+                if (!success) hasError = true;
+            } catch (error) {
+                results[endpoint] = 'error';
+                hasError = true;
+                logger.error('Clear rate limit error for endpoint', {
+                    ip,
+                    endpoint,
+                    error: error.message
+                });
+            }
+        }
+
+        if (hasError) {
             return res.status(500).json({
-                error: "Failed to clear rate limit",
+                error: "Failed to clear some rate limits",
                 ip,
-                endpoint
+                results,
+                timestamp: new Date().toISOString()
             });
         }
 
         res.json({
-            message: "Rate limit cleared successfully",
+            message: "All rate limits cleared successfully",
             ip,
-            endpoint,
+            results,
             timestamp: new Date().toISOString()
         });
     } catch (error) {
-        logger.error('Clear rate limit error', { error: error.message, ip: req.params.ip });
+        logger.error('Clear all rate limits error', { error: error.message, ip: req.params.ip });
         res.status(500).json({
             error: 'Internal server error',
             message: error.message
