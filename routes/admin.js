@@ -91,9 +91,15 @@ router.get("/stats", async (req, res) => {
       redis: {
         connected: redisStats.status === 'ready',
         status: redisStats.status,
+        host: redisStats.config.host,
+        port: redisStats.config.port,
+        poolSize: redisStats.poolSize,
+        activeConnections: redisStats.activeConnections,
+        totalConnects: redisStats.connects,
+        totalDisconnects: redisStats.disconnects,
         errors: redisStats.errors,
-        totalConnections: redisStats.totalConnections,
-        totalCommands: redisStats.totalCommands,
+        lastConnectTime: redisStats.lastConnectTime,
+        lastErrorTime: redisStats.lastErrorTime,
         healthy: redisStats.status === 'ready' && redisStats.errors < 10
       },
       services: {
@@ -102,11 +108,7 @@ router.get("/stats", async (req, res) => {
         circuitBreaker: serviceStatus.circuitBreaker,
         electrumxPool: serviceStatus.electrumxPool
       },
-      system: systemInfo,
-      rateLimiter: {
-        algorithm: 'sliding-window',
-        activeEndpoints: ['global', 'address', 'transaction', 'rawTransaction', 'batchTransaction']
-      }
+      system: systemInfo
     });
   } catch (error) {
     logger.error('Admin stats error', { error: error.message, ip: getRealClientIP(req) });
