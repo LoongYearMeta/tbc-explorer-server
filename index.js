@@ -105,7 +105,6 @@ async function startHttpServer() {
     });
   });
 
-  // 应用全局限流中间件
   app.use(globalRateLimit);
 
   app.use("/address", addressRoutes);

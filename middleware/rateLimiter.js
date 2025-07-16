@@ -278,7 +278,6 @@ class RateLimiter {
 
     async getStatus(ip, endpoint) {
         try {
-            // 所有端点都使用滑动窗口状态检查
             return await this.getSlidingWindowStatus(ip, endpoint);
         } catch (error) {
             logger.error('Get rate limit status error', { error: error.message, ip, endpoint });
@@ -328,11 +327,9 @@ class RateLimiter {
 
     async clearLimits(ip, endpoint) {
         try {
-            // 清除固定窗口的key（兼容性）
             const key = this.generateKey(ip, endpoint);
             await redisService.del(key);
             
-            // 清除滑动窗口的key（主要数据）
             const slidingKey = this.generateKey(ip, `sliding_${endpoint}`);
             await redisService.del(slidingKey);
             
@@ -347,15 +344,10 @@ class RateLimiter {
 
 const rateLimiter = new RateLimiter();
 
-// 导出预配置的限流中间件 - 全部使用滑动窗口算法
 export const globalRateLimit = rateLimiter.createSlidingWindowLimiter('global');
 export const addressRateLimit = rateLimiter.createSlidingWindowLimiter('address');
 export const transactionRateLimit = rateLimiter.createSlidingWindowLimiter('transaction');
 export const rawTransactionRateLimit = rateLimiter.createSlidingWindowLimiter('rawTransaction');
 export const batchTransactionRateLimit = rateLimiter.createSlidingWindowLimiter('batchTransaction');
-
-// 兼容性导出
-export const slidingAddressRateLimit = rateLimiter.createSlidingWindowLimiter('address');
-export const slidingTransactionRateLimit = rateLimiter.createSlidingWindowLimiter('transaction');
 
 export default rateLimiter; 

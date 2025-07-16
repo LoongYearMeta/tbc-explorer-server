@@ -1,13 +1,14 @@
 import express from "express";
+import mongoose from "mongoose";
+
 import rateLimiter from "../middleware/rateLimiter.js";
 import logger from "../config/logger.js";
 import { getRealClientIP } from "../lib/util.js";
 import { getRedisStats } from "../config/redis.js";
-import mongoose from "mongoose";
+import serviceManager from "../services/ServiceManager.js";
 
 const router = express.Router();
 
-// 本地访问限制中间件
 const localOnlyMiddleware = (req, res, next) => {
   const ip = getRealClientIP(req);
   const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' || ip === 'localhost';
@@ -22,15 +23,12 @@ const localOnlyMiddleware = (req, res, next) => {
   next();
 };
 
-// 应用本地访问限制到所有admin路由
 router.use(localOnlyMiddleware);
 
-// 获取详细统计数据
 router.get("/stats", async (req, res) => {
   try {
     logger.info("Admin stats request", { ip: getRealClientIP(req) });
 
-    // MongoDB连接状态
     async function getMongoPoolStats(type) {
       try {
         if (mongoose.connection.readyState !== 1) {
@@ -60,26 +58,18 @@ router.get("/stats", async (req, res) => {
 
     const dbState = mongoose.connection.readyState;
     const dbStatus = {
-      state: dbConnectionStates[dbState] || 'unknown',
       connected: dbState === 1,
+      state: dbConnectionStates[dbState] || 'unknown',
       host: mongoose.connection.host,
-      name: mongoose.connection.name,
-      readyState: dbState,
-      poolInfo: {
-        maxPoolSize: parseInt(process.env.MONGO_MAX_POOL_SIZE) || 1500,
-        minPoolSize: parseInt(process.env.MONGO_MIN_POOL_SIZE) || 50,
-        maxIdleTimeMS: parseInt(process.env.MONGO_MAX_IDLE_TIME) || 30000,
-        serverSelectionTimeoutMS: parseInt(process.env.MONGO_SERVER_SELECTION_TIMEOUT) || 5000,
-        heartbeatFrequencyMS: parseInt(process.env.MONGO_HEARTBEAT_FREQUENCY) || 10000,
-        currentConnections: await getMongoPoolStats('current'),
-        availableConnections: await getMongoPoolStats('available')
-      }
+      database: mongoose.connection.name,
+      currentConnections: await getMongoPoolStats('current'),
+      availableConnections: await getMongoPoolStats('available'),
+      healthy: dbState === 1
     };
 
-    // Redis状态
     const redisStats = getRedisStats();
+    const serviceStatus = serviceManager.getServiceStatus();
     
-    // 内存使用情况
     const memoryUsage = process.memoryUsage();
     const systemInfo = {
       pid: process.pid,
@@ -98,17 +88,24 @@ router.get("/stats", async (req, res) => {
     res.json({
       timestamp: new Date().toISOString(),
       database: dbStatus,
-      redis: redisStats,
+      redis: {
+        connected: redisStats.status === 'ready',
+        status: redisStats.status,
+        errors: redisStats.errors,
+        totalConnections: redisStats.totalConnections,
+        totalCommands: redisStats.totalCommands,
+        healthy: redisStats.status === 'ready' && redisStats.errors < 10
+      },
+      services: {
+        initialized: serviceStatus.initialized,
+        rpcServices: serviceStatus.rpcServices,
+        circuitBreaker: serviceStatus.circuitBreaker,
+        electrumxPool: serviceStatus.electrumxPool
+      },
       system: systemInfo,
       rateLimiter: {
-        algorithms: {
-          global: 'sliding-window',
-          address: 'sliding-window',
-          transaction: 'sliding-window',
-          rawTransaction: 'sliding-window',
-          batchTransaction: 'sliding-window'
-        },
-        configs: rateLimiter.config
+        algorithm: 'sliding-window',
+        activeEndpoints: ['global', 'address', 'transaction', 'rawTransaction', 'batchTransaction']
       }
     });
   } catch (error) {
@@ -120,7 +117,6 @@ router.get("/stats", async (req, res) => {
   }
 });
 
-// 获取特定IP的限流状态
 router.get("/ratelimit/:ip", async (req, res) => {
   try {
     const { ip } = req.params;
@@ -146,7 +142,7 @@ router.get("/ratelimit/:ip", async (req, res) => {
       ip,
       endpoint,
       status,
-      config: rateLimiter.config[endpoint] || rateLimiter.config.global
+      limit: rateLimiter.config[endpoint] || rateLimiter.config.global
     });
   } catch (error) {
     logger.error('Get rate limit status error', { error: error.message, ip: req.params.ip });
@@ -157,7 +153,6 @@ router.get("/ratelimit/:ip", async (req, res) => {
   }
 });
 
-// 获取多个端点的限流状态
 router.get("/ratelimit/:ip/all", async (req, res) => {
   try {
     const { ip } = req.params;
@@ -175,12 +170,12 @@ router.get("/ratelimit/:ip/all", async (req, res) => {
         const status = await rateLimiter.getStatus(ip, endpoint);
         rateLimitStatus[endpoint] = {
           ...status,
-          config: rateLimiter.config[endpoint] || rateLimiter.config.global
+          limit: `${rateLimiter.config[endpoint].max}/${rateLimiter.config[endpoint].windowMs/1000}s`
         };
       } catch (error) {
         rateLimitStatus[endpoint] = {
           error: error.message,
-          config: rateLimiter.config[endpoint] || rateLimiter.config.global
+          limit: `${rateLimiter.config[endpoint].max}/${rateLimiter.config[endpoint].windowMs/1000}s`
         };
       }
     }
@@ -199,7 +194,6 @@ router.get("/ratelimit/:ip/all", async (req, res) => {
   }
 });
 
-// 清除特定IP的限流记录
 router.delete("/ratelimit/:ip", async (req, res) => {
   try {
     const { ip } = req.params;
@@ -236,7 +230,6 @@ router.delete("/ratelimit/:ip", async (req, res) => {
   }
 });
 
-// 获取所有限流配置
 router.get("/ratelimit/config", async (req, res) => {
   try {
     logger.info("Rate limit config request", {
@@ -244,14 +237,14 @@ router.get("/ratelimit/config", async (req, res) => {
     });
 
     res.json({
-      configs: rateLimiter.config,
+      algorithm: 'sliding-window',
       endpoints: Object.keys(rateLimiter.config),
-      algorithms: {
-        global: 'sliding-window',
-        address: 'sliding-window',
-        transaction: 'sliding-window',
-        rawTransaction: 'sliding-window',
-        batchTransaction: 'sliding-window'
+      endpointLimits: {
+        global: `${rateLimiter.config.global.max}/${rateLimiter.config.global.windowMs/1000}s`,
+        address: `${rateLimiter.config.address.max}/${rateLimiter.config.address.windowMs/1000}s`,
+        transaction: `${rateLimiter.config.transaction.max}/${rateLimiter.config.transaction.windowMs/1000}s`,
+        rawTransaction: `${rateLimiter.config.rawTransaction.max}/${rateLimiter.config.rawTransaction.windowMs/1000}s`,
+        batchTransaction: `${rateLimiter.config.batchTransaction.max}/${rateLimiter.config.batchTransaction.windowMs/1000}s`
       }
     });
   } catch (error) {
