@@ -143,7 +143,7 @@ class RateLimiter {
                 if (req.originalUrl.startsWith('/admin')) {
                     return next();
                 }
-                
+
                 const ip = getRealClientIP(req);
                 const endpoint = configName;
                 const key = this.generateKey(ip, endpoint);
@@ -211,7 +211,7 @@ class RateLimiter {
                 if (req.originalUrl.startsWith('/admin')) {
                     return next();
                 }
-                
+
                 const ip = getRealClientIP(req);
                 const endpoint = `sliding_${configName}`;
                 const key = this.generateKey(ip, endpoint);
