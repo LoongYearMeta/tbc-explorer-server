@@ -10,252 +10,252 @@ import serviceManager from "../services/ServiceManager.js";
 const router = express.Router();
 
 const localOnlyMiddleware = (req, res, next) => {
-  const ip = getRealClientIP(req);
-  const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' || ip === 'localhost';
-  
-  if (!isLocal) {
-    logger.warn('Admin access denied for non-local IP', { ip, url: req.originalUrl });
-    return res.status(403).json({
-      error: 'Forbidden',
-      message: 'Admin endpoints are only accessible from localhost'
-    });
-  }
-  next();
+    const ip = getRealClientIP(req);
+    const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' || ip === 'localhost';
+
+    if (!isLocal) {
+        logger.warn('Admin access denied for non-local IP', { ip, url: req.originalUrl });
+        return res.status(403).json({
+            error: 'Forbidden',
+            message: 'Admin endpoints are only accessible from localhost'
+        });
+    }
+    next();
 };
 
 router.use(localOnlyMiddleware);
 
 router.get("/stats", async (req, res) => {
-  try {
-    logger.info("Admin stats request", { ip: getRealClientIP(req) });
+    try {
+        logger.info("Admin stats request", { ip: getRealClientIP(req) });
 
-    async function getMongoPoolStats(type) {
-      try {
-        if (mongoose.connection.readyState !== 1) {
-          return 'disconnected';
+        async function getMongoPoolStats(type) {
+            try {
+                if (mongoose.connection.readyState !== 1) {
+                    return 'disconnected';
+                }
+                const db = mongoose.connection.db;
+                if (!db) return 'no-db';
+
+                const serverStatus = await db.admin().serverStatus();
+                const connections = serverStatus.connections;
+
+                if (type === 'current') return connections.current || 0;
+                if (type === 'available') return connections.available || 0;
+                return 'unknown';
+            } catch (error) {
+                logger.debug('Failed to get MongoDB pool stats', { error: error.message });
+                return 'error';
+            }
         }
-        const db = mongoose.connection.db;
-        if (!db) return 'no-db';
-        
-        const serverStatus = await db.admin().serverStatus();
-        const connections = serverStatus.connections;
-        
-        if (type === 'current') return connections.current || 0;
-        if (type === 'available') return connections.available || 0;
-        return 'unknown';
-      } catch (error) {
-        logger.debug('Failed to get MongoDB pool stats', { error: error.message });
-        return 'error';
-      }
+
+        const dbConnectionStates = {
+            0: 'disconnected',
+            1: 'connected',
+            2: 'connecting',
+            3: 'disconnecting'
+        };
+
+        const dbState = mongoose.connection.readyState;
+        const dbStatus = {
+            connected: dbState === 1,
+            state: dbConnectionStates[dbState] || 'unknown',
+            host: mongoose.connection.host,
+            database: mongoose.connection.name,
+            currentConnections: await getMongoPoolStats('current'),
+            availableConnections: await getMongoPoolStats('available'),
+            healthy: dbState === 1
+        };
+
+        const redisStats = getRedisStats();
+        const serviceStatus = serviceManager.getServiceStatus();
+
+        const memoryUsage = process.memoryUsage();
+        const systemInfo = {
+            pid: process.pid,
+            uptime: process.uptime(),
+            nodeVersion: process.version,
+            memory: {
+                rss: Math.round(memoryUsage.rss / 1024 / 1024) + 'MB',
+                heapTotal: Math.round(memoryUsage.heapTotal / 1024 / 1024) + 'MB',
+                heapUsed: Math.round(memoryUsage.heapUsed / 1024 / 1024) + 'MB',
+                external: Math.round(memoryUsage.external / 1024 / 1024) + 'MB',
+                heapUsagePercent: Math.round((memoryUsage.heapUsed / memoryUsage.heapTotal) * 100)
+            },
+            cpuUsage: process.cpuUsage()
+        };
+
+        res.json({
+            timestamp: new Date().toISOString(),
+            database: dbStatus,
+            redis: {
+                connected: redisStats.status === 'ready',
+                status: redisStats.status,
+                host: redisStats.config.host,
+                port: redisStats.config.port,
+                poolSize: redisStats.poolSize,
+                activeConnections: redisStats.activeConnections,
+                totalConnects: redisStats.connects,
+                totalDisconnects: redisStats.disconnects,
+                errors: redisStats.errors,
+                lastConnectTime: redisStats.lastConnectTime,
+                lastErrorTime: redisStats.lastErrorTime,
+                healthy: redisStats.status === 'ready' && redisStats.errors < 10
+            },
+            services: {
+                initialized: serviceStatus.initialized,
+                rpcServices: serviceStatus.rpcServices,
+                circuitBreaker: serviceStatus.circuitBreaker,
+                electrumxPool: serviceStatus.electrumxPool
+            },
+            system: systemInfo
+        });
+    } catch (error) {
+        logger.error('Admin stats error', { error: error.message, ip: getRealClientIP(req) });
+        res.status(500).json({
+            error: 'Internal server error',
+            message: error.message
+        });
     }
-
-    const dbConnectionStates = {
-      0: 'disconnected',
-      1: 'connected', 
-      2: 'connecting',
-      3: 'disconnecting'
-    };
-
-    const dbState = mongoose.connection.readyState;
-    const dbStatus = {
-      connected: dbState === 1,
-      state: dbConnectionStates[dbState] || 'unknown',
-      host: mongoose.connection.host,
-      database: mongoose.connection.name,
-      currentConnections: await getMongoPoolStats('current'),
-      availableConnections: await getMongoPoolStats('available'),
-      healthy: dbState === 1
-    };
-
-    const redisStats = getRedisStats();
-    const serviceStatus = serviceManager.getServiceStatus();
-    
-    const memoryUsage = process.memoryUsage();
-    const systemInfo = {
-      pid: process.pid,
-      uptime: process.uptime(),
-      nodeVersion: process.version,
-      memory: {
-        rss: Math.round(memoryUsage.rss / 1024 / 1024) + 'MB',
-        heapTotal: Math.round(memoryUsage.heapTotal / 1024 / 1024) + 'MB',
-        heapUsed: Math.round(memoryUsage.heapUsed / 1024 / 1024) + 'MB',
-        external: Math.round(memoryUsage.external / 1024 / 1024) + 'MB',
-        heapUsagePercent: Math.round((memoryUsage.heapUsed / memoryUsage.heapTotal) * 100)
-      },
-      cpuUsage: process.cpuUsage()
-    };
-
-    res.json({
-      timestamp: new Date().toISOString(),
-      database: dbStatus,
-      redis: {
-        connected: redisStats.status === 'ready',
-        status: redisStats.status,
-        host: redisStats.config.host,
-        port: redisStats.config.port,
-        poolSize: redisStats.poolSize,
-        activeConnections: redisStats.activeConnections,
-        totalConnects: redisStats.connects,
-        totalDisconnects: redisStats.disconnects,
-        errors: redisStats.errors,
-        lastConnectTime: redisStats.lastConnectTime,
-        lastErrorTime: redisStats.lastErrorTime,
-        healthy: redisStats.status === 'ready' && redisStats.errors < 10
-      },
-      services: {
-        initialized: serviceStatus.initialized,
-        rpcServices: serviceStatus.rpcServices,
-        circuitBreaker: serviceStatus.circuitBreaker,
-        electrumxPool: serviceStatus.electrumxPool
-      },
-      system: systemInfo
-    });
-  } catch (error) {
-    logger.error('Admin stats error', { error: error.message, ip: getRealClientIP(req) });
-    res.status(500).json({
-      error: 'Internal server error',
-      message: error.message
-    });
-  }
 });
 
 router.get("/ratelimit/:ip", async (req, res) => {
-  try {
-    const { ip } = req.params;
-    const { endpoint = 'global' } = req.query;
-    
-    logger.info("Rate limit status request", {
-      targetIp: ip,
-      endpoint,
-      adminIp: getRealClientIP(req),
-    });
+    try {
+        const { ip } = req.params;
+        const { endpoint = 'global' } = req.query;
 
-    const status = await rateLimiter.getStatus(ip, endpoint);
-    
-    if (!status) {
-      return res.status(404).json({
-        error: "Rate limit status not found",
-        ip,
-        endpoint
-      });
+        logger.info("Rate limit status request", {
+            targetIp: ip,
+            endpoint,
+            adminIp: getRealClientIP(req),
+        });
+
+        const status = await rateLimiter.getStatus(ip, endpoint);
+
+        if (!status) {
+            return res.status(404).json({
+                error: "Rate limit status not found",
+                ip,
+                endpoint
+            });
+        }
+
+        res.json({
+            ip,
+            endpoint,
+            status,
+            limit: rateLimiter.config[endpoint] || rateLimiter.config.global
+        });
+    } catch (error) {
+        logger.error('Get rate limit status error', { error: error.message, ip: req.params.ip });
+        res.status(500).json({
+            error: 'Internal server error',
+            message: error.message
+        });
     }
-
-    res.json({
-      ip,
-      endpoint,
-      status,
-      limit: rateLimiter.config[endpoint] || rateLimiter.config.global
-    });
-  } catch (error) {
-    logger.error('Get rate limit status error', { error: error.message, ip: req.params.ip });
-    res.status(500).json({
-      error: 'Internal server error',
-      message: error.message
-    });
-  }
 });
 
 router.get("/ratelimit/:ip/all", async (req, res) => {
-  try {
-    const { ip } = req.params;
-    const endpoints = ['global', 'address', 'transaction', 'rawTransaction', 'batchTransaction'];
-    
-    logger.info("Rate limit all status request", {
-      targetIp: ip,
-      adminIp: getRealClientIP(req),
-    });
+    try {
+        const { ip } = req.params;
+        const endpoints = ['global', 'address', 'transaction', 'rawTransaction', 'batchTransaction'];
 
-    const rateLimitStatus = {};
-    
-    for (const endpoint of endpoints) {
-      try {
-        const status = await rateLimiter.getStatus(ip, endpoint);
-        rateLimitStatus[endpoint] = {
-          ...status,
-          limit: `${rateLimiter.config[endpoint].max}/${rateLimiter.config[endpoint].windowMs/1000}s`
-        };
-      } catch (error) {
-        rateLimitStatus[endpoint] = {
-          error: error.message,
-          limit: `${rateLimiter.config[endpoint].max}/${rateLimiter.config[endpoint].windowMs/1000}s`
-        };
-      }
+        logger.info("Rate limit all status request", {
+            targetIp: ip,
+            adminIp: getRealClientIP(req),
+        });
+
+        const rateLimitStatus = {};
+
+        for (const endpoint of endpoints) {
+            try {
+                const status = await rateLimiter.getStatus(ip, endpoint);
+                rateLimitStatus[endpoint] = {
+                    ...status,
+                    limit: `${rateLimiter.config[endpoint].max}/${rateLimiter.config[endpoint].windowMs / 1000}s`
+                };
+            } catch (error) {
+                rateLimitStatus[endpoint] = {
+                    error: error.message,
+                    limit: `${rateLimiter.config[endpoint].max}/${rateLimiter.config[endpoint].windowMs / 1000}s`
+                };
+            }
+        }
+
+        res.json({
+            ip,
+            status: rateLimitStatus,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        logger.error('Get all rate limit status error', { error: error.message, ip: req.params.ip });
+        res.status(500).json({
+            error: 'Internal server error',
+            message: error.message
+        });
     }
-
-    res.json({
-      ip,
-      status: rateLimitStatus,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    logger.error('Get all rate limit status error', { error: error.message, ip: req.params.ip });
-    res.status(500).json({
-      error: 'Internal server error',
-      message: error.message
-    });
-  }
 });
 
 router.delete("/ratelimit/:ip", async (req, res) => {
-  try {
-    const { ip } = req.params;
-    const { endpoint = 'global' } = req.query;
-    
-    logger.info("Rate limit clear request", {
-      targetIp: ip,
-      endpoint,
-      adminIp: getRealClientIP(req),
-    });
+    try {
+        const { ip } = req.params;
+        const { endpoint = 'global' } = req.query;
 
-    const success = await rateLimiter.clearLimits(ip, endpoint);
-    
-    if (!success) {
-      return res.status(500).json({
-        error: "Failed to clear rate limit",
-        ip,
-        endpoint
-      });
+        logger.info("Rate limit clear request", {
+            targetIp: ip,
+            endpoint,
+            adminIp: getRealClientIP(req),
+        });
+
+        const success = await rateLimiter.clearLimits(ip, endpoint);
+
+        if (!success) {
+            return res.status(500).json({
+                error: "Failed to clear rate limit",
+                ip,
+                endpoint
+            });
+        }
+
+        res.json({
+            message: "Rate limit cleared successfully",
+            ip,
+            endpoint,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        logger.error('Clear rate limit error', { error: error.message, ip: req.params.ip });
+        res.status(500).json({
+            error: 'Internal server error',
+            message: error.message
+        });
     }
-
-    res.json({
-      message: "Rate limit cleared successfully",
-      ip,
-      endpoint,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    logger.error('Clear rate limit error', { error: error.message, ip: req.params.ip });
-    res.status(500).json({
-      error: 'Internal server error',
-      message: error.message
-    });
-  }
 });
 
 router.get("/ratelimit/config", async (req, res) => {
-  try {
-    logger.info("Rate limit config request", {
-      adminIp: getRealClientIP(req),
-    });
+    try {
+        logger.info("Rate limit config request", {
+            adminIp: getRealClientIP(req),
+        });
 
-    res.json({
-      algorithm: 'sliding-window',
-      endpoints: Object.keys(rateLimiter.config),
-      endpointLimits: {
-        global: `${rateLimiter.config.global.max}/${rateLimiter.config.global.windowMs/1000}s`,
-        address: `${rateLimiter.config.address.max}/${rateLimiter.config.address.windowMs/1000}s`,
-        transaction: `${rateLimiter.config.transaction.max}/${rateLimiter.config.transaction.windowMs/1000}s`,
-        rawTransaction: `${rateLimiter.config.rawTransaction.max}/${rateLimiter.config.rawTransaction.windowMs/1000}s`,
-        batchTransaction: `${rateLimiter.config.batchTransaction.max}/${rateLimiter.config.batchTransaction.windowMs/1000}s`
-      }
-    });
-  } catch (error) {
-    logger.error('Get rate limit config error', { error: error.message });
-    res.status(500).json({
-      error: 'Internal server error',
-      message: error.message
-    });
-  }
+        res.json({
+            algorithm: 'sliding-window',
+            endpoints: Object.keys(rateLimiter.config),
+            endpointLimits: {
+                global: `${rateLimiter.config.global.max}/${rateLimiter.config.global.windowMs / 1000}s`,
+                address: `${rateLimiter.config.address.max}/${rateLimiter.config.address.windowMs / 1000}s`,
+                transaction: `${rateLimiter.config.transaction.max}/${rateLimiter.config.transaction.windowMs / 1000}s`,
+                rawTransaction: `${rateLimiter.config.rawTransaction.max}/${rateLimiter.config.rawTransaction.windowMs / 1000}s`,
+                batchTransaction: `${rateLimiter.config.batchTransaction.max}/${rateLimiter.config.batchTransaction.windowMs / 1000}s`
+            }
+        });
+    } catch (error) {
+        logger.error('Get rate limit config error', { error: error.message });
+        res.status(500).json({
+            error: 'Internal server error',
+            message: error.message
+        });
+    }
 });
 
 export default router; 

@@ -78,13 +78,13 @@ async function startHttpServer() {
 
   app.get("/health", async (req, res) => {
     const serviceStatus = serviceManager.getServiceStatus();
-    
+
     const dbState = mongoose.connection.readyState;
     const dbConnected = dbState === 1;
-    
+
     const redisStats = getRedisStats();
     const redisConnected = redisStats.status === 'ready';
-    
+
     const overallHealthy = serviceStatus.initialized && dbConnected && redisConnected;
 
     logger.info("Health check request", {
