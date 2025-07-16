@@ -259,9 +259,7 @@ class ZeroMQService {
       await blockDoc.save();
       logger.info(`[ZMQ] Successfully saved block ${blockHash} (height: ${blockDetails.height}) to database`);
 
-      // Update the previous block's nextblockhash field
       await this.updatePreviousBlockNextHash(blockDetails);
-
       await this.processBlockTransactions(blockDetails);
       await this.updateRedisBlockCache(blockDetails);
       this.scheduleUpdateMempoolCache(blockDetails.tx, blockDetails.height);
@@ -284,27 +282,29 @@ class ZeroMQService {
         return;
       }
 
-      // Update the previous block's nextblockhash field in database
       const updateResult = await Block.updateOne(
         { hash: blockDetails.previousblockhash },
         { $set: { nextblockhash: blockDetails.hash } }
       );
 
+      let needsRedisUpdate = true;
+
       if (updateResult.modifiedCount > 0) {
         logger.debug(`[ZMQ] Updated previous block ${blockDetails.previousblockhash} nextblockhash to ${blockDetails.hash}`);
       } else {
-        // Check if the previous block exists at all
         const existingPreviousBlock = await Block.findOne({ hash: blockDetails.previousblockhash });
         if (!existingPreviousBlock) {
           logger.warn(`[ZMQ] Previous block ${blockDetails.previousblockhash} not found in database, fetching from RPC`);
           await this.fetchAndSavePreviousBlock(blockDetails.previousblockhash, blockDetails.hash);
+          needsRedisUpdate = false; 
         } else {
           logger.debug(`[ZMQ] Previous block ${blockDetails.previousblockhash} already has correct nextblockhash`);
         }
       }
 
-      // Update the previous block in Redis cache if it exists
-      await this.updatePreviousBlockInRedisCache(blockDetails.previousblockhash, blockDetails.hash);
+      if (needsRedisUpdate) {
+        await this.updatePreviousBlockInRedisCache(blockDetails.previousblockhash, blockDetails.hash, blockDetails.height);
+      }
 
     } catch (error) {
       logger.error(`[ZMQ] Error updating previous block nextblockhash`, {
@@ -331,7 +331,6 @@ class ZeroMQService {
         return;
       }
 
-      // Set the nextblockhash field to the current block
       const previousBlockDoc = new Block({
         hash: previousBlockDetails.hash,
         height: previousBlockDetails.height,
@@ -347,7 +346,7 @@ class ZeroMQService {
         difficulty: previousBlockDetails.difficulty,
         chainwork: previousBlockDetails.chainwork,
         previousblockhash: previousBlockDetails.previousblockhash,
-        nextblockhash: currentBlockHash, // Set to current block hash
+        nextblockhash: currentBlockHash, 
         tx: previousBlockDetails.tx,
         totalFees: previousBlockDetails.totalFees,
         miner: previousBlockDetails.miner
@@ -356,22 +355,34 @@ class ZeroMQService {
       await previousBlockDoc.save();
       logger.info(`[ZMQ] Successfully fetched and saved previous block ${previousBlockHash} (height: ${previousBlockDetails.height}) with nextblockhash set to ${currentBlockHash}`);
 
-      // Also process the transactions for this block if needed
       await this.processBlockTransactions(previousBlockDetails);
-      
-      // Update Redis cache with the previous block
-      await this.updateRedisBlockCache(previousBlockDetails);
+
+      const previousBlockCacheKey = `blocks:recent:${previousBlockDetails.height}`;
+      previousBlockDetails.nextblockhash = currentBlockHash;
+      await redisService.setJSON(previousBlockCacheKey, previousBlockDetails);
+      logger.debug(`[ZMQ] Updated Redis cache for fetched previous block ${previousBlockHash} (height: ${previousBlockDetails.height}) with nextblockhash set to ${currentBlockHash}`);
 
     } catch (error) {
       if (error.code === 11000) {
         logger.debug(`[ZMQ] Previous block ${previousBlockHash} already exists (concurrent write), updating nextblockhash`);
-        // Try to update the nextblockhash again
         try {
           await Block.updateOne(
             { hash: previousBlockHash },
             { $set: { nextblockhash: currentBlockHash } }
           );
           logger.debug(`[ZMQ] Updated nextblockhash for existing previous block ${previousBlockHash}`);
+
+          const currentBlockHeight = await Block.findOne({ hash: currentBlockHash }).select('height');
+          if (currentBlockHeight) {
+            const previousBlockHeight = currentBlockHeight.height - 1;
+            const previousBlockCacheKey = `blocks:recent:${previousBlockHeight}`;
+            const cachedBlock = await redisService.getJSON(previousBlockCacheKey);
+            if (cachedBlock && cachedBlock.hash === previousBlockHash) {
+              cachedBlock.nextblockhash = currentBlockHash;
+              await redisService.setJSON(previousBlockCacheKey, cachedBlock);
+              logger.debug(`[ZMQ] Updated Redis cache for existing previous block ${previousBlockHash} nextblockhash`);
+            }
+          }
         } catch (updateError) {
           logger.error(`[ZMQ] Failed to update nextblockhash for existing previous block ${previousBlockHash}`, {
             error: updateError.message
@@ -386,28 +397,31 @@ class ZeroMQService {
     }
   }
 
-  async updatePreviousBlockInRedisCache(previousBlockHash, currentBlockHash) {
+  async updatePreviousBlockInRedisCache(previousBlockHash, currentBlockHash, currentBlockHeight) {
     try {
-      // Check if previous block exists in Redis cache
-      const pattern = 'tbc-explorer:blocks:recent:*';
-      const blockKeys = await redisService.exec('KEYS', pattern);
-      
-      for (const key of blockKeys) {
-        const cachedBlock = await redisService.getJSON(key.replace('tbc-explorer:', ''));
-        if (cachedBlock && cachedBlock.hash === previousBlockHash) {
-          // Update the cached block's nextblockhash field
-          cachedBlock.nextblockhash = currentBlockHash;
-          await redisService.setJSON(key.replace('tbc-explorer:', ''), cachedBlock);
-          logger.debug(`[ZMQ] Updated previous block ${previousBlockHash} nextblockhash in Redis cache`);
-          break;
-        }
+      const previousBlockHeight = currentBlockHeight - 1;
+      const previousBlockCacheKey = `blocks:recent:${previousBlockHeight}`;
+
+      const cachedBlock = await redisService.getJSON(previousBlockCacheKey);
+      if (cachedBlock && cachedBlock.hash === previousBlockHash) {
+        cachedBlock.nextblockhash = currentBlockHash;
+        await redisService.setJSON(previousBlockCacheKey, cachedBlock);
+        logger.debug(`[ZMQ] Updated previous block ${previousBlockHash} (height: ${previousBlockHeight}) nextblockhash in Redis cache`);
+      } else if (cachedBlock) {
+        logger.warn(`[ZMQ] Previous block height ${previousBlockHeight} exists in cache but hash mismatch`, {
+          expectedHash: previousBlockHash,
+          actualHash: cachedBlock.hash
+        });
+      } else {
+        logger.debug(`[ZMQ] Previous block ${previousBlockHash} (height: ${previousBlockHeight}) not found in Redis cache`);
       }
     } catch (error) {
       logger.error(`[ZMQ] Error updating previous block in Redis cache`, {
         error: error.message,
         stack: error.stack,
         previousBlockHash,
-        currentBlockHash
+        currentBlockHash,
+        currentBlockHeight
       });
     }
   }
