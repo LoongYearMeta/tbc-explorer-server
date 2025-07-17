@@ -86,10 +86,6 @@ router.get("/stats", async (req, res) => {
 
         res.json({
             timestamp: new Date().toISOString(),
-            worker: {
-                pid: process.pid,
-                type: process.env.WORKER_TYPE || 'http'
-            },
             database: dbStatus,
             redis: {
                 status: redisStats.status,
