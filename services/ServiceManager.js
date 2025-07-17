@@ -1340,9 +1340,6 @@ class ServiceManager {
   }
 
   getServiceStatus() {
-    const connectionConfig = getConnectionConfig();
-    const hasElectrumxPool = this.electrumxPool.connections.length > 0;
-
     return {
       initialized: this.initialized,
       rpcServices: Object.keys(this.rpcClients).map((name) => ({
@@ -1355,28 +1352,7 @@ class ServiceManager {
         ...this.circuitBreaker,
         isOpen: this.isCircuitBreakerOpen()
       },
-      electrumxPool: hasElectrumxPool ? {
-        totalConnections: this.electrumxPool.connections.length,
-        availableConnections: this.electrumxPool.connections.filter(conn => conn.connected && !conn.busy).length,
-        busyConnections: this.electrumxPool.connections.filter(conn => conn.connected && conn.busy).length,
-        brokenConnections: this.electrumxPool.connections.filter(conn => !conn.connected).length,
-        host: this.electrumxPool.host,
-        port: this.electrumxPool.port,
-        minConnections: this.electrumxPool.minConnections,
-        maxConnections: this.electrumxPool.maxConnections,
-        expansionBatchSize: this.electrumxPool.expansionBatchSize,
-        utilizationRate: this.electrumxPool.connections.length > 0 ?
-          (this.electrumxPool.connections.filter(conn => conn.connected && conn.busy).length / this.electrumxPool.connections.length * 100).toFixed(1) + '%' : '0%',
-        stats: {
-          ...this.electrumxPool.stats,
-          hitRate: this.electrumxPool.stats.totalRequests > 0 ?
-            (this.electrumxPool.stats.poolHits / this.electrumxPool.stats.totalRequests * 100).toFixed(2) + '%' : '0%'
-        }
-      } : {
-        disabled: true,
-        reason: `ElectrumX pool disabled for ${connectionConfig.processType} process type`,
-        configuredMaxConnections: connectionConfig.electrumx.maxConnections,
-        configuredMinConnections: connectionConfig.electrumx.minConnections,
+      electrumxPool: {
         stats: {
           ...this.electrumxPool.stats,
           hitRate: this.electrumxPool.stats.totalRequests > 0 ?

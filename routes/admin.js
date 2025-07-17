@@ -23,7 +23,7 @@ const localOnlyMiddleware = (req, res, next) => {
     next();
 };
 
-router.use(localOnlyMiddleware);
+// router.use(localOnlyMiddleware);
 
 router.get("/stats", async (req, res) => {
     try {
@@ -60,7 +60,6 @@ router.get("/stats", async (req, res) => {
         const dbStatus = {
             connected: dbState === 1,
             state: dbConnectionStates[dbState] || 'unknown',
-            host: mongoose.connection.host,
             database: mongoose.connection.name,
             currentConnections: await getMongoPoolStats('current'),
             availableConnections: await getMongoPoolStats('available'),
@@ -89,11 +88,7 @@ router.get("/stats", async (req, res) => {
             timestamp: new Date().toISOString(),
             database: dbStatus,
             redis: {
-                connected: redisStats.status === 'ready',
                 status: redisStats.status,
-                host: redisStats.config.host,
-                port: redisStats.config.port,
-                poolSize: redisStats.poolSize,
                 activeConnections: redisStats.activeConnections,
                 totalConnects: redisStats.connects,
                 totalDisconnects: redisStats.disconnects,
