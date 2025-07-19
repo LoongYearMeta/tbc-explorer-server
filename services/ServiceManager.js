@@ -1339,6 +1339,19 @@ class ServiceManager {
     }
   }
 
+  async validateAddress(address) {
+    try {
+      const result = await this.callRpcMethod("node-rpc", "validateaddress", [address]);
+      return result;
+    } catch (error) {
+      logger.error("Error validating address", {
+        address,
+        error: error.message
+      });
+      throw error;
+    }
+  }
+
   getServiceStatus() {
     return {
       initialized: this.initialized,

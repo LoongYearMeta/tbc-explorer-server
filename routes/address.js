@@ -16,15 +16,23 @@ router.get("/:address", addressRateLimit, async (req, res, next) => {
       ip: getRealClientIP(req),
     });
 
-    const [balance, txInfo] = await Promise.all([
+    const [balance, txInfo, validation] = await Promise.all([
       serviceManager.getAddressBalance(address),
-      serviceManager.getAddressTransactionIds(address)
+      serviceManager.getAddressTransactionIds(address),
+      serviceManager.validateAddress(address)
     ]);
 
     res.status(200).json({
       address,
       balance: balance.confirmed || 0,
       unconfirmed: balance.unconfirmed || 0,
+      validation: {
+        isValid: validation.isvalid || false,
+        scriptPubKey: validation.scriptPubKey || null,
+        ismine: validation.ismine || false,
+        iswatchonly: validation.iswatchonly || false,
+        isscript: validation.isscript || false
+      },
       txIds: txInfo.txIds,
       totalTransactions: txInfo.totalTransactions,
       scriptHash: txInfo.scriptHash,
