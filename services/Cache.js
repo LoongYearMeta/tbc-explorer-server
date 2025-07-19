@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 
 import logger from "../config/logger.js";
 import serviceManager from "./ServiceManager.js";
+import redisService from "./RedisService.js";
 
 dotenv.config();
 
@@ -157,7 +158,13 @@ class Cache {
         let result;
         switch (method) {
             case 'getRawMempool':
-                result = await serviceManager.getRawMempool();
+                result = await this.getRawMempoolFromRedis();
+                if (result === null) {
+                    result = await serviceManager.getRawMempool();
+                }
+                break;
+            case 'getMempoolFeeStats':
+                result = await this.getMempoolFeeStatsFromRedis();
                 break;
             case 'getMempoolInfo':
                 result = await serviceManager.getMempoolInfo();
@@ -181,6 +188,70 @@ class Cache {
         this.set(method, params, result);
 
         return result;
+    }
+
+    async getRawMempoolFromRedis() {
+        try {
+            const txIds = await redisService.getJSON('mempool:tx:list');
+            if (txIds && Array.isArray(txIds)) {
+                logger.debug(`Cache: Retrieved ${txIds.length} mempool transaction IDs from Redis`);
+                return txIds;
+            }
+            return null;
+        } catch (error) {
+            logger.error('Cache: Error getting raw mempool from Redis', {
+                error: error.message
+            });
+            return null;
+        }
+    }
+
+    async getMempoolFeeStatsFromRedis() {
+        try {
+            const feeStats = await redisService.getJSON('mempool:fee:stats');
+            
+            if (!feeStats) {
+                return {
+                    feeRanges: {
+                        "0-0.0001": { count: 0, totalFee: 0 },
+                        "0.0001-0.001": { count: 0, totalFee: 0 },
+                        "0.001-0.01": { count: 0, totalFee: 0 },
+                        "0.01-0.1": { count: 0, totalFee: 0 },
+                        "0.1-1": { count: 0, totalFee: 0 },
+                        ">1": { count: 0, totalFee: 0 }
+                    },
+                    totalTransactions: 0,
+                    totalFees: 0
+                };
+            }
+
+            const totalTransactions = Object.values(feeStats).reduce((sum, range) => sum + range.count, 0);
+            const totalFees = Object.values(feeStats).reduce((sum, range) => sum + range.totalFee, 0);
+
+            logger.debug(`Cache: Retrieved mempool fee statistics from Redis (${totalTransactions} transactions)`);
+
+            return {
+                feeRanges: feeStats,
+                totalTransactions,
+                totalFees
+            };
+        } catch (error) {
+            logger.error('Cache: Error getting mempool fee stats from Redis', {
+                error: error.message
+            });
+            return {
+                feeRanges: {
+                    "0-0.0001": { count: 0, totalFee: 0 },
+                    "0.0001-0.001": { count: 0, totalFee: 0 },
+                    "0.001-0.01": { count: 0, totalFee: 0 },
+                    "0.01-0.1": { count: 0, totalFee: 0 },
+                    "0.1-1": { count: 0, totalFee: 0 },
+                    ">1": { count: 0, totalFee: 0 }
+                },
+                totalTransactions: 0,
+                totalFees: 0
+            };
+        }
     }
 
     clear() {

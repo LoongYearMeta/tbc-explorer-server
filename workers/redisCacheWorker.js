@@ -79,6 +79,12 @@ class RedisCacheWorker {
                 logger.debug(`RedisCacheWorker: Cleared ${mempoolKeys.length} mempool transaction cache entries`);
             }
             await redisService.del('blocks:recent:queue');
+            
+            await redisService.del('mempool:fee:stats');
+            logger.debug(`RedisCacheWorker: Cleared mempool fee statistics`);
+
+            await redisService.del('mempool:tx:list');
+            logger.debug(`RedisCacheWorker: Cleared mempool transaction IDs list`);
 
             logger.info("RedisCacheWorker: Cache clearing completed");
 
@@ -142,6 +148,7 @@ class RedisCacheWorker {
 
         if (!mempoolTxIds || mempoolTxIds.length === 0) {
             logger.debug("RedisCacheWorker: No transactions in mempool");
+            await this.clearMempoolFeeStats();
             return 0;
         }
 
@@ -149,25 +156,56 @@ class RedisCacheWorker {
 
         const BATCH_SIZE = 100;
         let cachedCount = 0;
+        const feeStats = {
+            "0-0.0001": { count: 0, totalFee: 0 },
+            "0.0001-0.001": { count: 0, totalFee: 0 },
+            "0.001-0.01": { count: 0, totalFee: 0 },
+            "0.01-0.1": { count: 0, totalFee: 0 },
+            "0.1-1": { count: 0, totalFee: 0 },
+            ">1": { count: 0, totalFee: 0 }
+        };
 
         for (let i = 0; i < mempoolTxIds.length; i += BATCH_SIZE) {
             const batch = mempoolTxIds.slice(i, i + BATCH_SIZE);
 
             try {
-                const rawTxs = await serviceManager.getRawTransactionsHex(batch);
+                const [rawTxs, mempoolEntries] = await Promise.all([
+                    serviceManager.getRawTransactionsHex(batch),
+                    serviceManager.getMempoolEntries(batch)
+                ]);
 
                 for (let j = 0; j < batch.length; j++) {
                     const txid = batch[j];
                     const raw = rawTxs[j];
+                    const mempoolEntry = mempoolEntries[j];
 
-                    if (raw) {
+                    if (raw && mempoolEntry) {
                         const cacheKey = `mempool:tx:${txid}`;
                         const txData = {
                             txid: txid,
-                            raw: raw
+                            raw: raw,
+                            fee: mempoolEntry.fee,
+                            size: mempoolEntry.size,
+                            time: mempoolEntry.time,
+                            height: mempoolEntry.height,
+                            descendantcount: mempoolEntry.descendantcount,
+                            descendantsize: mempoolEntry.descendantsize,
+                            descendantfees: mempoolEntry.descendantfees,
+                            ancestorcount: mempoolEntry.ancestorcount,
+                            ancestorsize: mempoolEntry.ancestorsize,
+                            ancestorfees: mempoolEntry.ancestorfees
                         };
                         await redisService.setJSON(cacheKey, txData);
                         cachedCount++;
+
+                        this.updateFeeStats(feeStats, mempoolEntry.fee);
+                    } else {
+                        if (!raw) {
+                            logger.warn(`RedisCacheWorker: Failed to get raw transaction for txid: ${txid}`);
+                        }
+                        if (!mempoolEntry) {
+                            logger.warn(`RedisCacheWorker: Failed to get mempool entry for txid: ${txid}`);
+                        }
                     }
                 }
 
@@ -182,8 +220,64 @@ class RedisCacheWorker {
             }
         }
 
+        await this.updateMempoolFeeStats(feeStats);
+
+        await this.updateMempoolTxIds(mempoolTxIds);
+
         logger.debug(`RedisCacheWorker: Cached ${cachedCount} mempool transactions to Redis`);
         return cachedCount;
+    }
+
+    updateFeeStats(feeStats, fee) {
+        if (fee < 0.0001) {
+            feeStats["0-0.0001"].count++;
+            feeStats["0-0.0001"].totalFee += fee;
+        } else if (fee < 0.001) {
+            feeStats["0.0001-0.001"].count++;
+            feeStats["0.0001-0.001"].totalFee += fee;
+        } else if (fee < 0.01) {
+            feeStats["0.001-0.01"].count++;
+            feeStats["0.001-0.01"].totalFee += fee;
+        } else if (fee < 0.1) {
+            feeStats["0.01-0.1"].count++;
+            feeStats["0.01-0.1"].totalFee += fee;
+        } else if (fee < 1) {
+            feeStats["0.1-1"].count++;
+            feeStats["0.1-1"].totalFee += fee;
+        } else {
+            feeStats[">1"].count++;
+            feeStats[">1"].totalFee += fee;
+        }
+    }
+
+    async updateMempoolFeeStats(feeStats) {
+        try {
+            const cacheKey = 'mempool:fee:stats';
+            await redisService.setJSON(cacheKey, feeStats);
+            logger.debug("RedisCacheWorker: Updated mempool fee statistics in Redis");
+        } catch (error) {
+            logger.error("RedisCacheWorker: Error updating mempool fee statistics", {
+                error: error.message,
+                stack: error.stack
+            });
+        }
+    }
+
+    async clearMempoolFeeStats() {
+        try {
+            const cacheKey = 'mempool:fee:stats';
+            await redisService.del(cacheKey);
+            logger.debug("RedisCacheWorker: Cleared mempool fee statistics from Redis");
+            
+            const txListKey = 'mempool:tx:list';
+            await redisService.del(txListKey);
+            logger.debug("RedisCacheWorker: Cleared mempool transaction IDs list from Redis");
+        } catch (error) {
+            logger.error("RedisCacheWorker: Error clearing mempool fee statistics", {
+                error: error.message,
+                stack: error.stack
+            });
+        }
     }
 
     async trimBlockQueue() {
@@ -205,6 +299,19 @@ class RedisCacheWorker {
             }
         } catch (error) {
             logger.error("RedisCacheWorker: Error trimming block queue", {
+                error: error.message,
+                stack: error.stack
+            });
+        }
+    }
+
+    async updateMempoolTxIds(txIds) {
+        try {
+            const cacheKey = 'mempool:tx:list';
+            await redisService.setJSON(cacheKey, txIds || []);
+            logger.debug(`RedisCacheWorker: Updated mempool transaction IDs list (${txIds ? txIds.length : 0} transactions)`);
+        } catch (error) {
+            logger.error("RedisCacheWorker: Error updating mempool transaction IDs list", {
                 error: error.message,
                 stack: error.stack
             });

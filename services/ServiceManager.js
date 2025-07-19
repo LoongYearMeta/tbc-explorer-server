@@ -1200,6 +1200,61 @@ class ServiceManager {
     }
   }
 
+  async getMempoolEntries(txids) {
+    if (!txids || txids.length === 0) {
+      return [];
+    }
+
+    const results = new Array(txids.length);
+    const requests = [];
+    const indexMap = new Map();
+
+    for (let i = 0; i < txids.length; i++) {
+      const txid = txids[i];
+      if (txid) {
+        const requestIndex = requests.length;
+        indexMap.set(requestIndex, i);
+        requests.push({
+          method: "getmempoolentry",
+          parameters: [txid],
+        });
+      }
+    }
+
+    try {
+      if (requests.length > 0) {
+        const optimalBatchSize = this.calculateOptimalBatchSize(requests.length);
+        const batches = splitArrayIntoChunks(requests, optimalBatchSize);
+        const batchResults = await this.executeBatchesSequentially(batches);
+
+        let resultIndex = 0;
+        for (const result of batchResults) {
+          if (result) {
+            const originalIndex = indexMap.get(resultIndex);
+            results[originalIndex] = result;
+          }
+          resultIndex++;
+        }
+      }
+
+      return results;
+    } catch (error) {
+      logger.error("Error in getMempoolEntries", {
+        error: error.message,
+        txids: txids.length > 10 ? `${txids.slice(0, 10).join(', ')}... (${txids.length} total)` : txids.join(', ')
+      });
+      throw error;
+    }
+  }
+
+  async getMempoolEntry(txid) {
+    const results = await this.getMempoolEntries([txid]);
+    if (results && results.length > 0) {
+      return results[0];
+    }
+    return null;
+  }
+
   async getRawTransactions(txids) {
     const genesisCoinbaseTransactionId =
       coinConfig.genesisCoinbaseTransactionId;

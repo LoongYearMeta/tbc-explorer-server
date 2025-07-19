@@ -124,6 +124,8 @@ class GeneralRpcAggregator {
         return await cache.getCachedOrFetch('getMempoolInfo', params);
       case 'getRawMempool':
         return await cache.getCachedOrFetch('getRawMempool', params);
+      case 'getMempoolFeeStats':
+        return await cache.getCachedOrFetch('getMempoolFeeStats', params);
       case 'getNetworkInfo':
         return await cache.getCachedOrFetch('getNetworkInfo', params);
       default:

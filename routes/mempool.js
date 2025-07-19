@@ -39,4 +39,18 @@ router.get("/", async (req, res, next) => {
   }
 });
 
+router.get("/stats", async (req, res, next) => {
+  try {
+    logger.info("Mempool fee stats request", {
+      ip: getRealClientIP(req),
+    });
+
+    const feeStats = await generalRpcAggregator.callRpc('getMempoolFeeStats');
+
+    res.status(200).json(feeStats);
+  } catch (error) {
+    next(error);
+  }
+});
+
 export default router;

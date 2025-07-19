@@ -546,24 +546,91 @@ class ZeroMQService {
         return;
       }
 
-      const rawTx = await this.serviceManager.getRawTransactionHex(txHash);
+      const [rawTx, mempoolEntry] = await Promise.all([
+        this.serviceManager.getRawTransactionHex(txHash),
+        this.serviceManager.getMempoolEntry(txHash)
+      ]);
+
       if (!rawTx) {
         logger.warn(`[ZMQ] Failed to get raw transaction for ${txHash}`);
         return;
       }
 
+      if (!mempoolEntry) {
+        logger.warn(`[ZMQ] Failed to get mempool entry for ${txHash}`);
+        return;
+      }
+
       const txData = {
         txid: txHash,
-        raw: rawTx
+        raw: rawTx,
+        fee: mempoolEntry.fee,
+        size: mempoolEntry.size,
+        time: mempoolEntry.time,
+        height: mempoolEntry.height,
+        descendantcount: mempoolEntry.descendantcount,
+        descendantsize: mempoolEntry.descendantsize,
+        descendantfees: mempoolEntry.descendantfees,
+        ancestorcount: mempoolEntry.ancestorcount,
+        ancestorsize: mempoolEntry.ancestorsize,
+        ancestorfees: mempoolEntry.ancestorfees
       };
 
       await redisService.setJSON(cacheKey, txData);
-      logger.debug(`[ZMQ] Cached new transaction ${txHash} to Redis`);
+      logger.debug(`[ZMQ] Cached new transaction ${txHash} to Redis with fee data`);
+
+      await this.updateMempoolFeeStatsForNewTx(mempoolEntry.fee);
 
     } catch (error) {
       logger.error(`[ZMQ] Error processing new transaction hash ${txHash}`, {
         error: error.message,
         stack: error.stack
+      });
+    }
+  }
+
+  async updateMempoolFeeStatsForNewTx(fee) {
+    try {
+      const statsKey = 'mempool:fee:stats';
+      let feeStats = await redisService.getJSON(statsKey);
+
+      if (!feeStats) {
+        feeStats = {
+          "0-0.0001": { count: 0, totalFee: 0 },
+          "0.0001-0.001": { count: 0, totalFee: 0 },
+          "0.001-0.01": { count: 0, totalFee: 0 },
+          "0.01-0.1": { count: 0, totalFee: 0 },
+          "0.1-1": { count: 0, totalFee: 0 },
+          ">1": { count: 0, totalFee: 0 }
+        };
+      }
+
+      let feeRange;
+      if (fee < 0.0001) {
+        feeRange = "0-0.0001";
+      } else if (fee < 0.001) {
+        feeRange = "0.0001-0.001";
+      } else if (fee < 0.01) {
+        feeRange = "0.001-0.01";
+      } else if (fee < 0.1) {
+        feeRange = "0.01-0.1";
+      } else if (fee < 1) {
+        feeRange = "0.1-1";
+      } else {
+        feeRange = ">1";
+      }
+
+      feeStats[feeRange].count++;
+      feeStats[feeRange].totalFee += fee;
+
+      await redisService.setJSON(statsKey, feeStats);
+      logger.debug(`[ZMQ] Updated mempool fee statistics for new transaction (range: ${feeRange}, fee: ${fee})`);
+
+    } catch (error) {
+      logger.error(`[ZMQ] Error updating mempool fee statistics for new transaction`, {
+        error: error.message,
+        stack: error.stack,
+        fee: fee
       });
     }
   }
@@ -658,6 +725,12 @@ class ZeroMQService {
         logger.info(`[ZMQ] Cleared blocks recent queue`);
       }
 
+      await redisService.del('mempool:fee:stats');
+      logger.info(`[ZMQ] Cleared mempool fee statistics`);
+
+      await redisService.del('mempool:tx:list');
+      logger.info(`[ZMQ] Cleared mempool transaction IDs list`);
+
       logger.info('[ZMQ] Redis cache cleared successfully');
     } catch (error) {
       logger.error('[ZMQ] Error clearing Redis cache on startup', {
@@ -690,6 +763,12 @@ class ZeroMQService {
           await redisService.exec('DEL', ...cachedKeys);
           logger.debug(`[ZMQ] Mempool is empty, cleared ${cachedKeys.length} cached transactions`);
         }
+        await redisService.del('mempool:fee:stats');
+        logger.debug(`[ZMQ] Cleared mempool fee statistics`);
+        
+        await redisService.del('mempool:tx:list');
+        logger.debug(`[ZMQ] Cleared mempool transaction IDs list`);
+        
         return;
       }
 
@@ -698,11 +777,13 @@ class ZeroMQService {
 
       const toRemove = cachedTxIds.filter(txid => !currentTxSet.has(txid));
       const toAdd = filteredMempoolTxIds.filter(txid => !cachedTxSet.has(txid));
+      
       if (toRemove.length > 0) {
         const keysToRemove = toRemove.map(txid => `tbc-explorer:mempool:tx:${txid}`);
         await redisService.exec('DEL', ...keysToRemove);
         logger.debug(`[ZMQ] Removed ${toRemove.length} stale transactions from Redis cache`);
       }
+      
       if (toAdd.length > 0) {
         logger.debug(`[ZMQ] Adding ${toAdd.length} new transactions to Redis cache`);
 
@@ -713,16 +794,31 @@ class ZeroMQService {
           const batch = toAdd.slice(i, i + BATCH_SIZE);
 
           try {
-            const rawTxs = await this.serviceManager.getRawTransactionsHex(batch);
+            const [rawTxs, mempoolEntries] = await Promise.all([
+              this.serviceManager.getRawTransactionsHex(batch),
+              this.serviceManager.getMempoolEntries(batch)
+            ]);
+            
             for (let j = 0; j < batch.length; j++) {
               const txid = batch[j];
               const raw = rawTxs[j];
+              const mempoolEntry = mempoolEntries[j];
 
-              if (raw) {
+              if (raw && mempoolEntry) {
                 const cacheKey = `mempool:tx:${txid}`;
                 const txData = {
                   txid: txid,
-                  raw: raw
+                  raw: raw,
+                  fee: mempoolEntry.fee,
+                  size: mempoolEntry.size,
+                  time: mempoolEntry.time,
+                  height: mempoolEntry.height,
+                  descendantcount: mempoolEntry.descendantcount,
+                  descendantsize: mempoolEntry.descendantsize,
+                  descendantfees: mempoolEntry.descendantfees,
+                  ancestorcount: mempoolEntry.ancestorcount,
+                  ancestorsize: mempoolEntry.ancestorsize,
+                  ancestorfees: mempoolEntry.ancestorfees
                 };
                 await redisService.setJSON(cacheKey, txData);
                 cachedCount++;
@@ -743,6 +839,9 @@ class ZeroMQService {
         logger.debug(`[ZMQ] Added ${cachedCount} new transactions to Redis cache`);
       }
 
+      await this.rebuildMempoolFeeStats();
+      await this.updateMempoolTxIdsList(filteredMempoolTxIds);
+
       logger.debug(`[ZMQ] Successfully updated Redis mempool cache`, {
         removed: toRemove.length,
         added: toAdd.length,
@@ -756,6 +855,79 @@ class ZeroMQService {
         stack: error.stack
       });
     }
+  }
+
+  async updateMempoolTxIdsList(txIds) {
+    try {
+      const cacheKey = 'mempool:tx:list';
+      await redisService.setJSON(cacheKey, txIds || []);
+      logger.debug(`[ZMQ] Updated mempool transaction IDs list (${txIds ? txIds.length : 0} transactions)`);
+    } catch (error) {
+      logger.error(`[ZMQ] Error updating mempool transaction IDs list`, {
+        error: error.message,
+        stack: error.stack
+      });
+    }
+  }
+
+  async rebuildMempoolFeeStats() {
+    try {
+      logger.debug(`[ZMQ] Rebuilding mempool fee statistics`);
+      
+      const pattern = 'tbc-explorer:mempool:tx:*';
+      const cachedKeys = await redisService.exec('KEYS', pattern);
+      
+      const feeStats = {
+        "0-0.0001": { count: 0, totalFee: 0 },
+        "0.0001-0.001": { count: 0, totalFee: 0 },
+        "0.001-0.01": { count: 0, totalFee: 0 },
+        "0.01-0.1": { count: 0, totalFee: 0 },
+        "0.1-1": { count: 0, totalFee: 0 },
+        ">1": { count: 0, totalFee: 0 }
+      };
+
+      for (const key of cachedKeys) {
+        try {
+          const txData = await redisService.getJSON(key);
+          if (txData && typeof txData.fee === 'number') {
+            this.updateFeeStatsHelper(feeStats, txData.fee);
+          }
+        } catch (error) {
+          logger.warn(`[ZMQ] Error reading cached transaction for fee stats: ${key}`, {
+            error: error.message
+          });
+        }
+      }
+
+      await redisService.setJSON('mempool:fee:stats', feeStats);
+      logger.debug(`[ZMQ] Rebuilt mempool fee statistics for ${cachedKeys.length} transactions`);
+
+    } catch (error) {
+      logger.error(`[ZMQ] Error rebuilding mempool fee statistics`, {
+        error: error.message,
+        stack: error.stack
+      });
+    }
+  }
+
+  updateFeeStatsHelper(feeStats, fee) {
+    let feeRange;
+    if (fee < 0.0001) {
+      feeRange = "0-0.0001";
+    } else if (fee < 0.001) {
+      feeRange = "0.0001-0.001";
+    } else if (fee < 0.01) {
+      feeRange = "0.001-0.01";
+    } else if (fee < 0.1) {
+      feeRange = "0.01-0.1";
+    } else if (fee < 1) {
+      feeRange = "0.1-1";
+    } else {
+      feeRange = ">1";
+    }
+
+    feeStats[feeRange].count++;
+    feeStats[feeRange].totalFee += fee;
   }
 
   scheduleUpdateMempoolCache(blockTxIds, blockHeight, attempt = 1, maxAttempts = 3) {
